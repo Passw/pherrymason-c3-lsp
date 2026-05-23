@@ -4,9 +4,9 @@ package c3
 var keywords = map[string]struct{}{
 	"void": {}, "bool": {}, "char": {}, "double": {},
 	"float": {}, "float16": {}, "int128": {}, "ichar": {},
-	"int": {}, "iptr": {}, "isz": {}, "long": {},
+	"int": {}, "iptr": {}, "sz": {}, "long": {},
 	"short": {}, "uint128": {}, "uint": {}, "ulong": {},
-	"uptr": {}, "ushort": {}, "usz": {}, "float128": {},
+	"uptr": {}, "ushort": {}, "float128": {}, "bfloat16": {},
 	"any": {}, "fault": {}, "typeid": {}, "assert": {},
 	"asm": {}, "bitstruct": {}, "break": {}, "case": {},
 	"catch": {}, "const": {}, "continue": {}, "alias": {},
@@ -17,17 +17,17 @@ var keywords = map[string]struct{}{
 	"macro": {}, "module": {}, "nextcase": {}, "null": {},
 	"return": {}, "static": {}, "struct": {}, "switch": {},
 	"true": {}, "try": {}, "union": {}, "var": {},
-	"while": {}, "attrdef": {},
+	"while": {}, "attrdef": {}, "constdef": {}, "faultdef": {},
 
-	"$alignof": {}, "$assert": {}, "$case": {}, "$default": {},
+	"$assert": {}, "$case": {}, "$default": {},
 	"$defined": {}, "$echo": {}, "$embed": {}, "$exec": {},
 	"$else": {}, "$endfor": {}, "$endforeach": {}, "$endif": {},
-	"$endswitch": {}, "$eval": {}, "$evaltype": {}, "$error": {},
+	"$endswitch": {}, "$eval": {}, "$error": {},
 	"$extnameof": {}, "$for": {}, "$foreach": {}, "$if": {},
-	"$include": {}, "$nameof": {}, "$offsetof": {}, "$qnameof": {},
-	"$sizeof": {}, "$stringify": {}, "$switch": {}, "$typefrom": {},
-	"$typeof": {}, "$vacount": {}, "$vatype": {}, "$vaconst": {},
-	"$vaarg": {}, "$vaexpr": {}, "$vasplat": {},
+	"$include": {}, "$qnameof": {}, "$expand": {},
+	"$stringify": {}, "$switch": {}, "$Typefrom": {},
+	"$Typeof": {}, "$vacount": {}, "$vatype": {}, "$vaconst": {},
+	"$vaarg": {}, "$vaexpr": {}, "$vasplat": {}, "$feature": {},
 }
 
 func Keywords() map[string]struct{} {

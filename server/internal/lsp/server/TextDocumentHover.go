@@ -163,7 +163,7 @@ func getLanguageTypeSize(typeName string) uint {
 		size = 128 / 8
 	case "iptr", "uptr":
 		size = utils.PointerSize()
-	case "isz", "usz":
+	case "sz":
 		size = 0
 	}
 
