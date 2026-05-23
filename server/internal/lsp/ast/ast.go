@@ -2,7 +2,7 @@ package ast
 
 import (
 	"github.com/pherrymason/c3-lsp/pkg/option"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 type Position struct {

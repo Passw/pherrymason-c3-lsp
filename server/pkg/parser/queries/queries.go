@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/pherrymason/c3-lsp/internal/lsp/cst"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 //go:embed symbols.scm
@@ -17,11 +17,13 @@ var localVarDeclQueryRaw []byte
 var SymbolsQuery, LocalVarDeclQuery *sitter.Query
 
 func init() {
-	var err error
-	if SymbolsQuery, err = sitter.NewQuery(symbolsQueryRaw, cst.Language); err != nil {
-		panic(fmt.Errorf("could not create query symbols: %v", err))
+	var qErr *sitter.QueryError
+	SymbolsQuery, qErr = sitter.NewQuery(cst.Language, string(symbolsQueryRaw))
+	if qErr != nil {
+		panic(fmt.Errorf("could not create query symbols: %v", qErr))
 	}
-	if LocalVarDeclQuery, err = sitter.NewQuery(localVarDeclQueryRaw, cst.Language); err != nil {
-		panic(fmt.Errorf("could not create query local var declaration: %v", err))
+	LocalVarDeclQuery, qErr = sitter.NewQuery(cst.Language, string(localVarDeclQueryRaw))
+	if qErr != nil {
+		panic(fmt.Errorf("could not create query local var declaration: %v", qErr))
 	}
 }

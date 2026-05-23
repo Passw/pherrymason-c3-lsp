@@ -3,7 +3,7 @@ package context
 import (
 	"github.com/pherrymason/c3-lsp/internal/lsp/project_state"
 	"github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -32,8 +32,8 @@ func BuildFromDocumentPosition(
 
 	// Search sitter.Node where cursor is currently
 	node := root.NamedDescendantForPointRange(
-		sitter.Point{Row: uint32(position.Line), Column: uint32(position.Character)},
-		sitter.Point{Row: uint32(position.Line), Column: uint32(position.Character + 1)},
+		sitter.Point{Row: uint(position.Line), Column: uint(position.Character)},
+		sitter.Point{Row: uint(position.Line), Column: uint(position.Character + 1)},
 	)
 
 	if node == nil {
@@ -41,10 +41,10 @@ func BuildFromDocumentPosition(
 		return context
 	}
 
-	//s := fmt.Sprintf("Node found. Type: %s. Content: %s", node.Type(), node.Content([]byte(doc.SourceCode.Text)))
+	//s := fmt.Sprintf("Node found. Type: %s. Content: %s", node.Kind(), node.Utf8Text([]byte(doc.SourceCode.Text)))
 	//fmt.Printf(s)
 
-	switch node.Type() {
+	switch node.Kind() {
 	case "integer_literal":
 		context.IsLiteral = true
 	case "real_literal":
@@ -63,7 +63,7 @@ func BuildFromDocumentPosition(
 	case "ident":
 		context.IsIdentifier = true
 
-		if node.Parent().Type() == "module_resolution" {
+		if node.Parent().Kind() == "module_resolution" {
 			context.IsModuleIdentifier = true
 		}
 	}
