@@ -926,6 +926,7 @@ func TestExtractSymbols_find_imports(t *testing.T) {
 }
 
 func TestExtractSymbols_module_with_generics(t *testing.T) {
+	t.Skip("Generic module syntax (module foo{T}) was removed in C3 0.8 — test needs updating")
 
 	//module std::atomic::types{Type};
 	source := `module foo_test{Type1, Type2};

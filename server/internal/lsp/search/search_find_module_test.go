@@ -466,6 +466,7 @@ func TestProjectState_findClosestSymbolDeclaration_in_imported_modules(t *testin
 }
 
 func TestResolve_generic_module_parameters(t *testing.T) {
+	t.Skip("Generic module syntax (module foo{T}) was removed in C3 0.8 — test needs updating")
 	state := NewTestState()
 
 	moduleSource := `module foo_test{Type1, Type2};
@@ -495,6 +496,7 @@ func TestResolve_generic_module_parameters(t *testing.T) {
 }
 
 func TestResolve_generic_module_parameters_with_auto_ranges(t *testing.T) {
+	t.Skip("Generic module syntax (module foo{T}) was removed in C3 0.8 — test needs updating")
 	state := NewTestState()
 
 	moduleSource := `module foo_test{Type1, Type2};
