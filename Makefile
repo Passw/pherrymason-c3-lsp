@@ -2,11 +2,10 @@
 
 ASSETS_DIR = assets
 
-# NOTE: go-tree-sitter only supports 14
-TREE_SITTER_GENERATE_ABI = 14
+TREE_SITTER_GENERATE_ABI = 15
 TREE_SITTER_DIR = $(ASSETS_DIR)/tree-sitter-c3
 TREE_SITTER_GIT = git@github.com:c3lang/tree-sitter-c3.git
-TREE_SITTER_COMMIT = 2c04e78
+TREE_SITTER_COMMIT = 9b4eebc
 
 C3C_DIR = $(ASSETS_DIR)/c3c
 C3C_GIT = git@github.com:c3lang/c3c.git
