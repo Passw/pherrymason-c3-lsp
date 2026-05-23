@@ -4,7 +4,7 @@ import (
 	"github.com/pherrymason/c3-lsp/pkg/cast"
 	"github.com/pherrymason/c3-lsp/pkg/dedent"
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 /*
@@ -36,9 +36,9 @@ func (p *Parser) nodeToDocComment(node *sitter.Node, sourceCode []byte) idx.DocC
 	body := ""
 	hasBody := false
 	bodyNode := node.Child(1)
-	if bodyNode.Type() == "doc_comment_text" {
+	if bodyNode.Kind() == "doc_comment_text" {
 		// Dedent to accept indented doc strings.
-		body = dedent.Dedent(bodyNode.Content(sourceCode))
+		body = dedent.Dedent(bodyNode.Utf8Text(sourceCode))
 		hasBody = true
 	}
 
@@ -46,19 +46,19 @@ func (p *Parser) nodeToDocComment(node *sitter.Node, sourceCode []byte) idx.DocC
 
 	if (hasBody && node.ChildCount() >= 4) || (!hasBody && node.ChildCount() >= 3) {
 		for i := 1; i <= int(node.ChildCount())-2; i++ {
-			contractNode := node.Child(i)
+			contractNode := node.Child(uint(i))
 
 			// Skip the body
 			// (We already skip '<*' and '*>' since we skip first and last indices above)
-			if contractNode.Type() == "doc_comment_contract" {
-				name := contractNode.ChildByFieldName("name").Content(sourceCode)
+			if contractNode.Kind() == "doc_comment_contract" {
+				name := contractNode.ChildByFieldName("name").Utf8Text(sourceCode)
 				body := ""
 				if contractNode.ChildCount() >= 2 {
 					// Right now, contracts can only have a single line, so we don't dedent.
 					// They can also be arbitrary expressions, so it's best to not modify them
 					// at the moment.
 					start := contractNode.Child(1).StartByte()
-					end := contractNode.Child(int(contractNode.ChildCount()) - 1).EndByte()
+					end := contractNode.Child(contractNode.ChildCount() - 1).EndByte()
 					body = string(sourceCode[start:end])
 				}
 

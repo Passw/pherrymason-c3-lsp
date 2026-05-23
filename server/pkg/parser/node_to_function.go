@@ -7,7 +7,7 @@ import (
 	"github.com/pherrymason/c3-lsp/pkg/cast"
 	"github.com/pherrymason/c3-lsp/pkg/option"
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -27,7 +27,8 @@ import (
 */
 func (p *Parser) nodeToFunction(node *sitter.Node, currentModule *idx.Module, docId *string, sourceCode []byte) (idx.Function, error) {
 	var typeIdentifier string
-	funcHeader := node.Child(1)
+	headerIdx := firstNamedNonDocChild(node)
+	funcHeader := node.Child(headerIdx)
 
 	if funcHeader == nil {
 		return idx.Function{}, errors.New("child node not found")
@@ -40,20 +41,20 @@ func (p *Parser) nodeToFunction(node *sitter.Node, currentModule *idx.Module, do
 	}
 
 	if funcHeader.ChildByFieldName("method_type") != nil {
-		typeIdentifier = funcHeader.ChildByFieldName("method_type").Content(sourceCode)
+		typeIdentifier = funcHeader.ChildByFieldName("method_type").Utf8Text(sourceCode)
 	}
 
-	functionName := nameNode.Content(sourceCode)
+	functionName := nameNode.Utf8Text(sourceCode)
 
 	var argumentIds []string
 	var arguments []*idx.Variable
-	parameters := node.Child(2)
+	parameters := node.Child(headerIdx + 1)
 	parameterIndex := 0
 
 	if parameters.ChildCount() > 2 {
-		for i := uint32(0); i < parameters.ChildCount(); i++ {
-			argNode := parameters.Child(int(i))
-			if argNode.Type() != "param" {
+		for i := uint(0); i < parameters.ChildCount(); i++ {
+			argNode := parameters.Child(uint(i))
+			if argNode.Kind() != "param" {
 				continue
 			}
 
@@ -69,19 +70,19 @@ func (p *Parser) nodeToFunction(node *sitter.Node, currentModule *idx.Module, do
 	}
 
 	var symbol idx.Function
+	docStart := declStart(node)
 	if typeIdentifier != "" {
 		symbol = idx.NewTypeFunction(
 			typeIdentifier,
 			functionName,
 			p.typeNodeToType(funcHeader.ChildByFieldName("return_type"), currentModule, sourceCode),
-			//funcHeader.ChildByFieldName("return_type").Content(sourceCode),
 			argumentIds,
 			currentModule.GetModuleString(),
 			*docId,
-			idx.NewRangeFromTreeSitterPositions(nameNode.StartPoint(),
-				nameNode.EndPoint()),
-			idx.NewRangeFromTreeSitterPositions(node.StartPoint(),
-				node.EndPoint()),
+			idx.NewRangeFromTreeSitterPositions(nameNode.StartPosition(),
+				nameNode.EndPosition()),
+			idx.NewRangeFromTreeSitterPositions(docStart,
+				node.EndPosition()),
 			protocol.CompletionItemKindFunction,
 		)
 	} else {
@@ -91,20 +92,20 @@ func (p *Parser) nodeToFunction(node *sitter.Node, currentModule *idx.Module, do
 			argumentIds,
 			currentModule.GetModuleString(),
 			*docId,
-			idx.NewRangeFromTreeSitterPositions(nameNode.StartPoint(),
-				nameNode.EndPoint()),
-			idx.NewRangeFromTreeSitterPositions(node.StartPoint(),
-				node.EndPoint()),
+			idx.NewRangeFromTreeSitterPositions(nameNode.StartPosition(),
+				nameNode.EndPosition()),
+			idx.NewRangeFromTreeSitterPositions(docStart,
+				node.EndPosition()),
 		)
 	}
 
 	// Parse attributes (e.g. @private, @inline, etc.)
 	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(i)
-		if child.Type() == "attributes" {
+		child := node.Child(uint(i))
+		if child.Kind() == "attributes" {
 			var attributes []string
 			for a := 0; a < int(child.ChildCount()); a++ {
-				attributes = append(attributes, child.Child(a).Content(sourceCode))
+				attributes = append(attributes, child.Child(uint(a)).Utf8Text(sourceCode))
 			}
 			symbol.SetAttributes(attributes)
 			break
@@ -160,10 +161,10 @@ func (p *Parser) nodeToArgument(argNode *sitter.Node, methodIdentifier string, c
 	ref := ""
 	paramDefault := option.None[string]()
 
-	for i := uint32(0); i < argNode.ChildCount(); i++ {
-		n := argNode.Child(int(i))
+	for i := uint(0); i < argNode.ChildCount(); i++ {
+		n := argNode.Child(uint(i))
 
-		switch n.Type() {
+		switch n.Kind() {
 		case "type":
 			argType = p.typeNodeToType(n, currentModule, sourceCode)
 			foundType = true
@@ -181,8 +182,8 @@ func (p *Parser) nodeToArgument(argNode *sitter.Node, methodIdentifier string, c
 		case "&":
 			ref = "*"
 		case "ident":
-			identifier = n.Content(sourceCode)
-			idRange = idx.NewRangeFromTreeSitterPositions(n.StartPoint(), n.EndPoint())
+			identifier = n.Utf8Text(sourceCode)
+			idRange = idx.NewRangeFromTreeSitterPositions(n.StartPosition(), n.EndPosition())
 			// When detecting a self, the type is the Struct type, plus '*' for '&self'
 			if identifier == "self" && methodIdentifier != "" {
 				argType = idx.NewTypeFromString(methodIdentifier+ref, currentModule.GetModuleString())
@@ -190,19 +191,19 @@ func (p *Parser) nodeToArgument(argNode *sitter.Node, methodIdentifier string, c
 
 		// $arg (macro)
 		case "ct_ident":
-			identifier = n.Content(sourceCode)
-			idRange = idx.NewRangeFromTreeSitterPositions(n.StartPoint(), n.EndPoint())
+			identifier = n.Utf8Text(sourceCode)
+			idRange = idx.NewRangeFromTreeSitterPositions(n.StartPosition(), n.EndPosition())
 
 		// #arg (macro)
 		case "hash_ident":
-			identifier = n.Content(sourceCode)
-			idRange = idx.NewRangeFromTreeSitterPositions(n.StartPoint(), n.EndPoint())
+			identifier = n.Utf8Text(sourceCode)
+			idRange = idx.NewRangeFromTreeSitterPositions(n.StartPosition(), n.EndPosition())
 
 		// = default
 		case "param_default":
 			assigned := n.ChildByFieldName("right")
 			if assigned != nil {
-				paramDefault = option.Some(assigned.Content(sourceCode))
+				paramDefault = option.Some(assigned.Utf8Text(sourceCode))
 			}
 		}
 	}
@@ -218,8 +219,8 @@ func (p *Parser) nodeToArgument(argNode *sitter.Node, methodIdentifier string, c
 		currentModule.GetModuleString(),
 		*docId,
 		idRange,
-		idx.NewRangeFromTreeSitterPositions(argNode.StartPoint(),
-			argNode.EndPoint()),
+		idx.NewRangeFromTreeSitterPositions(argNode.StartPosition(),
+			argNode.EndPosition()),
 	)
 
 	variable.Arg.VarArg = varArg
@@ -263,7 +264,8 @@ func (p *Parser) nodeToArgument(argNode *sitter.Node, methodIdentifier string, c
 */
 func (p *Parser) nodeToMacro(node *sitter.Node, currentModule *idx.Module, docId *string, sourceCode []byte) (idx.Function, error) {
 	var nameNode *sitter.Node
-	macroHeader := node.Child(1)
+	macroHeaderIdx := firstNamedNonDocChild(node)
+	macroHeader := node.Child(macroHeaderIdx)
 
 	if macroHeader == nil {
 		return idx.Function{}, errors.New("child node not found")
@@ -278,10 +280,10 @@ func (p *Parser) nodeToMacro(node *sitter.Node, currentModule *idx.Module, docId
 	var typeIdentifier string = ""
 	var returnType *idx.Type = nil
 
-	if macroHeader.Type() == "macro_header" {
+	if macroHeader.Kind() == "macro_header" {
 		methodTypeNode := macroHeader.ChildByFieldName("method_type")
 		if methodTypeNode != nil {
-			typeIdentifier = methodTypeNode.Content(sourceCode)
+			typeIdentifier = methodTypeNode.Utf8Text(sourceCode)
 		}
 
 		returnTypeNode := macroHeader.ChildByFieldName("return_type")
@@ -292,27 +294,27 @@ func (p *Parser) nodeToMacro(node *sitter.Node, currentModule *idx.Module, docId
 
 	var argumentIds []string
 	arguments := []*idx.Variable{}
-	parameters := node.Child(2)
+	parameters := node.Child(macroHeaderIdx + 1)
 	parameterIndex := 0
 
 	if parameters.ChildCount() > 2 {
-		for i := uint32(0); i < parameters.ChildCount(); i++ {
+		for i := uint(0); i < parameters.ChildCount(); i++ {
 			var argument *idx.Variable
-			argNode := parameters.Child(int(i))
+			argNode := parameters.Child(uint(i))
 
 			// '@body' in macro name(args; @body) { ... }
-			if argNode.Type() == "trailing_block_param" {
+			if argNode.Kind() == "trailing_block_param" {
 				identNode := argNode.Child(0)
-				identifier := identNode.Content(sourceCode)
-				idRange := idx.NewRangeFromTreeSitterPositions(identNode.StartPoint(), identNode.EndPoint())
+				identifier := identNode.Utf8Text(sourceCode)
+				idRange := idx.NewRangeFromTreeSitterPositions(identNode.StartPosition(), identNode.EndPosition())
 
 				// Get body function signature
 				// If it's missing, it's just empty args
 				bodyParams := "()"
-				if argNode.ChildCount() >= 2 && argNode.Child(1).Type() == "func_param_list" {
+				if argNode.ChildCount() >= 2 && argNode.Child(1).Kind() == "func_param_list" {
 					// TODO: Maybe we should properly parse the parameters at some point
 					// For now, simple string manipulation suffices
-					bodyParams = argNode.Child(1).Content(sourceCode)
+					bodyParams = argNode.Child(1).Utf8Text(sourceCode)
 				}
 
 				// '@body' is equivalent to a function
@@ -325,12 +327,12 @@ func (p *Parser) nodeToMacro(node *sitter.Node, currentModule *idx.Module, docId
 					currentModule.GetModuleString(),
 					*docId,
 					idRange,
-					idx.NewRangeFromTreeSitterPositions(argNode.StartPoint(),
-						argNode.EndPoint()),
+					idx.NewRangeFromTreeSitterPositions(argNode.StartPosition(),
+						argNode.EndPosition()),
 				)
 
 				argument = &variable
-			} else if argNode.Type() == "param" {
+			} else if argNode.Kind() == "param" {
 				argument = p.nodeToArgument(argNode, typeIdentifier, currentModule, docId, sourceCode, parameterIndex)
 			} else {
 				continue
@@ -345,7 +347,8 @@ func (p *Parser) nodeToMacro(node *sitter.Node, currentModule *idx.Module, docId
 		}
 	}
 
-	macroName := nameNode.Content(sourceCode)
+	macroName := nameNode.Utf8Text(sourceCode)
+	macroDocStart := declStart(node)
 
 	var symbol idx.Function
 	if typeIdentifier != "" {
@@ -356,10 +359,10 @@ func (p *Parser) nodeToMacro(node *sitter.Node, currentModule *idx.Module, docId
 			returnType,
 			currentModule.GetModuleString(),
 			*docId,
-			idx.NewRangeFromTreeSitterPositions(nameNode.StartPoint(),
-				nameNode.EndPoint()),
-			idx.NewRangeFromTreeSitterPositions(node.StartPoint(),
-				node.EndPoint()),
+			idx.NewRangeFromTreeSitterPositions(nameNode.StartPosition(),
+				nameNode.EndPosition()),
+			idx.NewRangeFromTreeSitterPositions(macroDocStart,
+				node.EndPosition()),
 			protocol.CompletionItemKindFunction,
 		)
 	} else {
@@ -369,10 +372,10 @@ func (p *Parser) nodeToMacro(node *sitter.Node, currentModule *idx.Module, docId
 			returnType,
 			currentModule.GetModuleString(),
 			*docId,
-			idx.NewRangeFromTreeSitterPositions(nameNode.StartPoint(),
-				nameNode.EndPoint()),
-			idx.NewRangeFromTreeSitterPositions(node.StartPoint(),
-				node.EndPoint()),
+			idx.NewRangeFromTreeSitterPositions(nameNode.StartPosition(),
+				nameNode.EndPosition()),
+			idx.NewRangeFromTreeSitterPositions(macroDocStart,
+				node.EndPosition()),
 		)
 	}
 

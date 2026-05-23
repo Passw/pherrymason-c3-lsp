@@ -3,7 +3,7 @@ package parser
 import (
 	"github.com/pherrymason/c3-lsp/pkg/option"
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 /*
@@ -35,21 +35,21 @@ struct_member_declaration: $ => choice(
 */
 func (p *Parser) nodeToStruct(node *sitter.Node, currentModule *idx.Module, docId *string, sourceCode []byte) (idx.Struct, []idx.Type) {
 	nameNode := node.ChildByFieldName("name")
-	name := nameNode.Content(sourceCode)
+	name := nameNode.Utf8Text(sourceCode)
 	var interfaces []string
 	isUnion := false
 
 	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(i)
-		switch child.Type() {
+		child := node.Child(uint(i))
+		switch child.Kind() {
 		case "union":
 			isUnion = true
 		case "interface_impl_list":
 			// TODO
 			for x := 0; x < int(child.ChildCount()); x++ {
-				n := child.Child(x)
+				n := child.Child(uint(x))
 				if n.IsNamed() {
-					interfaces = append(interfaces, n.Content(sourceCode))
+					interfaces = append(interfaces, n.Utf8Text(sourceCode))
 				}
 			}
 		case "attributes":
@@ -64,14 +64,15 @@ func (p *Parser) nodeToStruct(node *sitter.Node, currentModule *idx.Module, docI
 	structFields, membersNeedingSubtypingResolve := p.parse_struct_body(bodyNode, currentModule, docId, sourceCode)
 
 	var _struct idx.Struct
+	docStart := declStart(node)
 	if isUnion {
 		_struct = idx.NewUnion(
 			name,
 			structFields,
 			currentModule.GetModuleString(),
 			*docId,
-			idx.NewRangeFromTreeSitterPositions(nameNode.StartPoint(), nameNode.EndPoint()),
-			idx.NewRangeFromTreeSitterPositions(node.StartPoint(), node.EndPoint()),
+			idx.NewRangeFromTreeSitterPositions(nameNode.StartPosition(), nameNode.EndPosition()),
+			idx.NewRangeFromTreeSitterPositions(docStart, node.EndPosition()),
 		)
 	} else {
 		_struct = idx.NewStruct(
@@ -80,8 +81,8 @@ func (p *Parser) nodeToStruct(node *sitter.Node, currentModule *idx.Module, docI
 			structFields,
 			currentModule.GetModuleString(),
 			*docId,
-			idx.NewRangeFromTreeSitterPositions(nameNode.StartPoint(), nameNode.EndPoint()),
-			idx.NewRangeFromTreeSitterPositions(node.StartPoint(), node.EndPoint()),
+			idx.NewRangeFromTreeSitterPositions(nameNode.StartPosition(), nameNode.EndPosition()),
+			idx.NewRangeFromTreeSitterPositions(docStart, node.EndPosition()),
 		)
 	}
 
@@ -94,12 +95,12 @@ func (p *Parser) parse_struct_body(bodyNode *sitter.Node, currentModule *idx.Mod
 
 	// Iterate through struct_member_declaration nodes
 	for i := 0; i < int(bodyNode.ChildCount()); i++ {
-		memberNode := bodyNode.Child(i)
+		memberNode := bodyNode.Child(uint(i))
 		isInline := false
 		isSubStruct := false
 
-		//fmt.Println("body child:", memberNode.Type())
-		if memberNode.Type() != "struct_member_declaration" {
+		//fmt.Println("body child:", memberNode.Kind())
+		if memberNode.Kind() != "struct_member_declaration" {
 			continue
 		}
 
@@ -112,9 +113,9 @@ func (p *Parser) parse_struct_body(bodyNode *sitter.Node, currentModule *idx.Mod
 
 		// Iterate through children of struct_member_declaration
 		for x := 0; x < int(memberNode.ChildCount()); x++ {
-			n := memberNode.Child(x)
-			// fmt.Println("child:", n.Type(), "::", memberNode.Content(sourceCode))
-			switch n.Type() {
+			n := memberNode.Child(uint(x))
+			// fmt.Println("child:", n.Kind(), "::", memberNode.Utf8Text(sourceCode))
+			switch n.Kind() {
 			case "type":
 				fieldType = p.typeNodeToType(n, currentModule, sourceCode)
 				if isInline {
@@ -123,9 +124,9 @@ func (p *Parser) parse_struct_body(bodyNode *sitter.Node, currentModule *idx.Mod
 
 			case "identifier_list":
 				for j := 0; j < int(n.ChildCount()); j++ {
-					identifiers = append(identifiers, n.Child(j).Content(sourceCode))
+					identifiers = append(identifiers, n.Child(uint(j)).Utf8Text(sourceCode))
 					identifiersRange = append(identifiersRange,
-						idx.NewRangeFromTreeSitterPositions(n.StartPoint(), n.EndPoint()),
+						idx.NewRangeFromTreeSitterPositions(n.StartPosition(), n.EndPosition()),
 					)
 				}
 			case "attributes":
@@ -147,9 +148,9 @@ func (p *Parser) parse_struct_body(bodyNode *sitter.Node, currentModule *idx.Mod
 				isInline = true
 
 			case "ident":
-				identifier = n.Content(sourceCode)
+				identifier = n.Utf8Text(sourceCode)
 				identifiersRange = append(identifiersRange,
-					idx.NewRangeFromTreeSitterPositions(n.StartPoint(), n.EndPoint()),
+					idx.NewRangeFromTreeSitterPositions(n.StartPosition(), n.EndPosition()),
 				)
 			}
 		}

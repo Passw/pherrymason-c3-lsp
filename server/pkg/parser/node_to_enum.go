@@ -2,7 +2,7 @@ package parser
 
 import (
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 /*
@@ -51,51 +51,51 @@ func (p *Parser) nodeToEnum(node *sitter.Node, currentModule *idx.Module, docId 
 	var associatedParameters []idx.Variable
 
 	module := currentModule.GetModuleString()
-	enumRange := idx.NewRangeFromTreeSitterPositions(node.StartPoint(), node.EndPoint())
+	enumRange := idx.NewRangeFromTreeSitterPositions(declStart(node), node.EndPosition())
 
 	nameNode := node.ChildByFieldName("name")
 	name := ""
 	idRange := idx.NewRange(0, 0, 0, 0)
 	if nameNode != nil {
-		name = nameNode.Content(sourceCode)
-		idRange = idx.NewRangeFromTreeSitterPositions(nameNode.StartPoint(), nameNode.EndPoint())
+		name = nameNode.Utf8Text(sourceCode)
+		idRange = idx.NewRangeFromTreeSitterPositions(nameNode.StartPosition(), nameNode.EndPosition())
 	}
 
 	for i := 0; i < int(node.ChildCount()); i++ {
-		n := node.Child(i)
-		switch n.Type() {
+		n := node.Child(uint(i))
+		switch n.Kind() {
 		case "enum_spec":
 			typeNode := n.ChildByFieldName("type")
 			paramListIndex := 1
 			if typeNode != nil {
 				// Custom enum backing type is optional
-				baseType = typeNode.Content(sourceCode)
+				baseType = typeNode.Utf8Text(sourceCode)
 				paramListIndex = 2
 			}
 
-			paramList := n.Child(paramListIndex)
+			paramList := n.Child(uint(paramListIndex))
 			// Check if has enum_param_list
 			if paramList != nil {
 				// Try to get enum_param_list
 				for p := 0; p < int(paramList.ChildCount()); p++ {
-					paramNode := paramList.Child(p)
-					if paramNode.Type() == "enum_param" {
+					paramNode := paramList.Child(uint(p))
+					if paramNode.Kind() == "enum_param" {
 						paramTypeNode := paramNode.ChildByFieldName("type")
 						paramNameNode := paramNode.ChildByFieldName("name")
 						if paramTypeNode == nil || paramNameNode == nil {
 							continue
 						}
 
-						//fmt.Println(paramNode.Type(), paramNode.Content(sourceCode))
+						//fmt.Println(paramNode.Kind(), paramNode.Utf8Text(sourceCode))
 						associatedParameters = append(
 							associatedParameters,
 							idx.NewVariable(
-								paramNameNode.Content(sourceCode),
-								idx.NewTypeFromString(paramTypeNode.Content(sourceCode), module),
+								paramNameNode.Utf8Text(sourceCode),
+								idx.NewTypeFromString(paramTypeNode.Utf8Text(sourceCode), module),
 								module,
 								*docId,
-								idx.NewRangeFromTreeSitterPositions(paramNameNode.StartPoint(), paramNameNode.EndPoint()),
-								idx.NewRangeFromTreeSitterPositions(paramNode.StartPoint(), paramNode.EndPoint()),
+								idx.NewRangeFromTreeSitterPositions(paramNameNode.StartPosition(), paramNameNode.EndPosition()),
+								idx.NewRangeFromTreeSitterPositions(paramNode.StartPosition(), paramNode.EndPosition()),
 							),
 						)
 					}
@@ -104,21 +104,21 @@ func (p *Parser) nodeToEnum(node *sitter.Node, currentModule *idx.Module, docId 
 
 		case "enum_body":
 			for i := 0; i < int(n.ChildCount()); i++ {
-				enumeratorNode := n.Child(i)
+				enumeratorNode := n.Child(uint(i))
 
-				if enumeratorNode.Type() == "enum_constant" {
+				if enumeratorNode.Kind() == "enum_constant" {
 					enumeratorName := enumeratorNode.ChildByFieldName("name")
 					if enumeratorName == nil {
 						// Invalid node
 						continue
 					}
 					enumerator := idx.NewEnumerator(
-						enumeratorName.Content(sourceCode),
+						enumeratorName.Utf8Text(sourceCode),
 						"",
 						associatedParameters,
 						name,
 						module,
-						idx.NewRangeFromTreeSitterPositions(enumeratorName.StartPoint(), enumeratorName.EndPoint()),
+						idx.NewRangeFromTreeSitterPositions(enumeratorName.StartPosition(), enumeratorName.EndPosition()),
 						*docId,
 					)
 					enumerators = append(enumerators, enumerator)
