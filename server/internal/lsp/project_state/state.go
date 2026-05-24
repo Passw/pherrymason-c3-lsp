@@ -77,10 +77,11 @@ func (s *ProjectState) GetDocumentDiagnostics() map[string][]protocol.Diagnostic
 }
 
 func (s *ProjectState) SetLanguageVersion(languageVersion string, c3cLibPath string) {
-	stdlibModules := LoadStdLib(s.logger, languageVersion, c3cLibPath)
-	s.indexParsedSymbols(stdlibModules, stdlibModules.DocId())
-
-	s.symbolsTable.Register(stdlibModules, symbols_table.PendingToResolve{})
+	stdlibFileModules := LoadStdLibByFile(s.logger, languageVersion, c3cLibPath)
+	for _, unitModules := range stdlibFileModules {
+		s.indexParsedSymbols(unitModules, unitModules.DocId())
+		s.symbolsTable.Register(unitModules, symbols_table.PendingToResolve{})
+	}
 }
 
 func (s *ProjectState) SetDocumentDiagnostics(docId string, diagnostics []protocol.Diagnostic) {

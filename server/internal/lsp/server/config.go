@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/pherrymason/c3-lsp/internal/c3c"
@@ -127,13 +129,63 @@ func (s *Server) applyVersionAndLoadStdlib(userConfiguredVersion option.Option[s
 	requestedLanguageVersion := checkRequestedLanguageVersion(s.server.Log, s.options.C3.Version)
 
 	// Determine c3cLibPath to pass to SetLanguageVersion
-	// Priority: explicit stdlib-path > c3c-path/lib > empty string
+	// Priority: explicit stdlib-path > configured c3c path > "c3c" on system PATH
 	c3cLibPath := ""
 	if s.options.C3.StdlibPath.IsSome() {
 		c3cLibPath = s.options.C3.StdlibPath.Get()
 	} else if s.options.C3.Path.IsSome() {
-		c3cLibPath = s.options.C3.Path.Get() + "/lib"
+		c3cLibPath = resolveStdlibFromBinary(s.options.C3.Path.Get())
+	} else {
+		// No explicit path configured: try "c3c" on the system PATH
+		c3cLibPath = resolveStdlibFromBinary("c3c")
 	}
 
 	s.state.SetLanguageVersion(requestedLanguageVersion, c3cLibPath)
+}
+
+// resolveStdlibFromBinary takes a c3c binary name or path (e.g. "c3c" or
+// "/usr/bin/c3c") and returns the path to the C3 standard library directory
+// (the "lib/c3" directory alongside the binary's install prefix).
+//
+// Typical layouts:
+//
+//	/usr/bin/c3c        → /usr/lib/c3
+//	/opt/homebrew/bin/c3c → /opt/homebrew/lib/c3
+//	/path/to/c3c        → /path/to/lib          (fallback: binary-dir/lib)
+func resolveStdlibFromBinary(binaryPath string) string {
+	// Resolve the binary to an absolute path (handles bare "c3c" via PATH)
+	absPath, err := exec.LookPath(binaryPath)
+	if err != nil {
+		// Not on PATH — treat as a literal path
+		absPath = binaryPath
+	}
+
+	// Resolve symlinks so we get the real install location
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		resolved = absPath
+	}
+
+	binDir := filepath.Dir(resolved)
+	installPrefix := filepath.Dir(binDir) // parent of bin/
+
+	// Standard layout: <prefix>/lib/c3/std
+	candidate := filepath.Join(installPrefix, "lib", "c3")
+	if info, err := os.Stat(filepath.Join(candidate, "std")); err == nil && info.IsDir() {
+		return candidate
+	}
+
+	// Fallback: some distributions put everything flat: <prefix>/lib/std
+	candidate2 := filepath.Join(installPrefix, "lib")
+	if info, err := os.Stat(filepath.Join(candidate2, "std")); err == nil && info.IsDir() {
+		return candidate2
+	}
+
+	// Last resort: binary directory itself (dev/source builds where c3c lives next to lib/)
+	candidate3 := filepath.Join(binDir, "lib")
+	if info, err := os.Stat(filepath.Join(candidate3, "std")); err == nil && info.IsDir() {
+		return candidate3
+	}
+
+	return ""
 }

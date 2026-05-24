@@ -207,7 +207,7 @@ func Test_extractModulePath(t *testing.T) {
 		{
 			name:     "Writing a module name (including one :)",
 			input:    "aModule:",
-			expected: option.None[symbols.ModulePath](),
+			expected: option.Some[symbols.ModulePath](symbols.NewModulePathFromString("aModule")),
 		},
 		{
 			name:     "Writing a module name (including both ::)",

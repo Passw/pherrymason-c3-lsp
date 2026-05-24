@@ -1,3 +1,6 @@
+// stdlib_indexer_json is a helper tool that tests stdlib indexing by
+// parsing C3 source files and reporting how many modules/functions were found.
+// It is not used by the LSP at runtime; the LSP indexes stdlib directly.
 package main
 
 import (
@@ -5,13 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
-	"github.com/pherrymason/c3-lsp/internal/lsp/stdlib"
 	"github.com/pherrymason/c3-lsp/pkg/document"
 	"github.com/pherrymason/c3-lsp/pkg/fs"
 	p "github.com/pherrymason/c3-lsp/pkg/parser"
-	"github.com/pherrymason/c3-lsp/pkg/symbols_table"
 	"github.com/tliron/commonlog"
 )
 
@@ -38,8 +38,8 @@ func main() {
 	logger := commonlog.GetLogger("")
 	parser := p.NewParser(logger)
 
-	docId := "_stdlib_" + c3cVersion
-	parsedModules := symbols_table.NewParsedModules(&docId)
+	totalModules := 0
+	totalFunctions := 0
 
 	for i, filePath := range files {
 		relPath, _ := filepath.Rel(baseLibPath, filePath)
@@ -50,44 +50,18 @@ func main() {
 			panic(fmt.Errorf("could not read file %s: %v", filePath, err))
 		}
 
-		// Replace absolute paths with placeholder
-		normalizedPath := strings.ReplaceAll(filePath, baseLibPath, "<stdlib-path>")
-		doc := document.NewDocumentFromString(normalizedPath, string(content))
+		doc := document.NewDocumentFromString(filePath, string(content))
+		modules, _ := parser.ParseSymbols(&doc)
 
-		modules, pendingTypes := parser.ParseSymbols(&doc)
-		// Merge modules into parsedModules
 		for _, mod := range modules.Modules() {
-			if !mod.IsPrivate() {
-				parsedModules.RegisterModule(mod)
-			}
+			totalModules++
+			totalFunctions += len(mod.ChildrenFunctions)
 		}
-		// Note: pendingTypes might need special handling
-		_ = pendingTypes
 	}
 
-	fmt.Printf("\nParsed %d modules\n", len(parsedModules.Modules()))
-
-	// Save to cache
-	if err := stdlib.SaveStdlibToCache(logger, c3cVersion, &parsedModules); err != nil {
-		panic(fmt.Errorf("failed to save stdlib cache: %v", err))
-	}
-
-	cacheFile, _ := stdlib.GetStdlibCacheFile(c3cVersion)
-	fmt.Printf("\n✓ Successfully generated stdlib cache at:\n  %s\n", cacheFile)
-
-	// Print cache file size
-	if info, err := os.Stat(cacheFile); err == nil {
-		fmt.Printf("  Size: %.2f MB\n", float64(info.Size())/(1024*1024))
-	}
-
-	// Verify the cache can be loaded
-	fmt.Println("\nVerifying cache...")
-	loaded, err := stdlib.LoadStdlibFromCache(logger, c3cVersion)
-	if err != nil {
-		panic(fmt.Errorf("failed to verify cache: %v", err))
-	}
-
-	fmt.Printf("✓ Cache verified - loaded %d modules\n", len(loaded.Modules()))
+	fmt.Printf("\nTotal modules indexed: %d\n", totalModules)
+	fmt.Printf("Total functions indexed: %d\n", totalFunctions)
+	fmt.Printf("\nNote: stdlib is indexed per-file at LSP startup and cached to disk for subsequent sessions.\n")
 }
 
 func getC3Version(path string) string {
