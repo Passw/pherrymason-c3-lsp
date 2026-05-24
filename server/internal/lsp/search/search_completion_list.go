@@ -473,17 +473,16 @@ func (s *Search) BuildCompletionList(
 
 		for _, storedIdentifier := range scopeSymbols {
 			hasPrefix := strings.HasPrefix(storedIdentifier.GetName(), symbolInPosition.Text())
+			if !hasPrefix && storedIdentifier.GetKind() == protocol.CompletionItemKindModule {
+				// Modules are stored as full paths (e.g. "std::io") but users
+				// reference them by short name (e.g. "io"). Match by suffix too.
+				hasPrefix = strings.HasSuffix(storedIdentifier.GetName(), "::"+symbolInPosition.Text())
+			}
 			if filterMembers && !hasPrefix {
 				continue
 			}
 
 			if storedIdentifier.GetKind() == protocol.CompletionItemKindModule {
-				/*fullSymbolAtCursor, _ := doc.SymbolBeforeCursor(
-					symbols.Position{
-						Line:      uint(position.Line),
-						Character: uint(position.Character) - 1,
-					})
-				fullSymbolAtCursor.AdvanceEndCharacter()*/
 				editRange := symbolInPosition.FullTextRange().ToLSP()
 
 				items = append(items, protocol.CompletionItem{
