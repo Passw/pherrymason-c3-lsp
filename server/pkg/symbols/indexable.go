@@ -126,6 +126,12 @@ func (b *BaseIndexable) SetDocumentURI(docId string) {
 	b.DocumentURI = docId
 }
 
+// ReconstructModulePath restores the Module field from ModuleString.
+// Needed after JSON deserialization since Module is tagged json:"-".
+func (b *BaseIndexable) ReconstructModulePath() {
+	b.Module = NewModulePathFromString(b.ModuleString)
+}
+
 func (b *BaseIndexable) GetDocComment() *DocComment {
 	return b.DocComment
 }
