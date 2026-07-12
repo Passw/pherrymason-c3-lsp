@@ -8,9 +8,38 @@ import (
 )
 
 // C3ProjectConfig represents the relevant fields from a C3 project.json file.
+//
+// The supported glob syntax for "sources" and "excludes" matches what the C3
+// compiler uses:
+//   - `*`        matches any sequence of characters within a single path segment
+//   - `**`       matches one or more whole path segments
+//   - `?`        matches a single character
+//   - `[abc]`    matches any single character in the set
+//
+// Patterns are interpreted relative to the project.json location. A pattern
+// starting with `/` is treated as relative to the project root after the slash.
 type C3ProjectConfig struct {
 	DependencySearchPaths []string `json:"dependency-search-paths"`
 	Dependencies          []string `json:"dependencies"`
+	Sources               []string `json:"sources"`
+	Excludes              []string `json:"excludes"`
+}
+
+// DefaultExcludePatterns are patterns that are always excluded from project
+// source indexing, in addition to anything declared in "excludes". These match
+// build outputs and VCS metadata that should never be treated as project code.
+//
+// A bare directory name covers the directory itself, everything beneath it,
+// and nested directories of the same name anywhere in the tree.
+//
+// Patterns use forward slashes; filepath.Walk results are normalized via
+// filepath.ToSlash before matching.
+var DefaultExcludePatterns = []string{
+	"build",
+	"dist",
+	"out",
+	"target",
+	".git",
 }
 
 // DependencyResolution holds the result of resolving a dependency.

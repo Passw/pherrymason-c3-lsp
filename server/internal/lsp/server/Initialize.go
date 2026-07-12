@@ -74,8 +74,41 @@ func (h *Server) indexWorkspace() {
 	path := h.state.GetProjectRootURI()
 	canonicalPath := fs.GetCanonicalPath(path)
 
-	// Index workspace source files
-	files, _ := fs.ScanForC3(canonicalPath)
+	// Decide the project source set:
+	//   - if project.json declares "sources": expand those patterns
+	//   - if project.json exists but has no "sources": warn and skip project
+	//     source indexing — dependency libraries still load below
+	//   - if there is no project.json at all: fall back to the original
+	//     directory walk, minus the default-excluded build / .git trees
+	config, err := fs.ReadC3ProjectConfig(canonicalPath)
+	if err != nil {
+		h.server.Log.Warningf("Failed to read project.json: %v", err)
+	}
+
+	var files []string
+
+	switch {
+	case config == nil:
+		h.server.Log.Infof("project.json: not found — falling back to directory walk with default excludes")
+		fallback, fallbackErr := fs.ScanProjectFallback(canonicalPath, nil)
+		if fallbackErr != nil {
+			h.server.Log.Warningf("Failed to scan workspace: %v", fallbackErr)
+		} else {
+			files = fallback
+		}
+	default:
+		resolved, hasConfig, resolveErr := fs.ResolveProjectSources(canonicalPath, config)
+		if resolveErr != nil {
+			h.server.Log.Warningf("Failed to resolve project sources: %v", resolveErr)
+			break
+		}
+		if hasConfig && len(config.Sources) == 0 {
+			h.server.Log.Warningf("project.json: no \"sources\" declared — skipping project source indexing. Add a \"sources\" array to project.json to enable project-wide features.")
+			break
+		}
+		files = resolved
+	}
+
 	for _, filePath := range files {
 		content, _ := os.ReadFile(filePath)
 		doc := document.NewDocumentFromString(filePath, string(content))
