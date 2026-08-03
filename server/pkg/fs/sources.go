@@ -62,18 +62,9 @@ func ResolveProjectSources(projectDir string, config *C3ProjectConfig) (files []
 		return nil, true, fmt.Errorf("resolving project root: %w", err)
 	}
 
-	// Compile excludes once. A pattern without any "/**" or "**" suffix is
-	// promoted to "match the entry OR anything beneath it" so that patterns
-	// like "build" or ".git" exclude their contents as well as themselves.
-	excludePatterns := append([]string(nil), DefaultExcludePatterns...)
-	excludePatterns = append(excludePatterns, config.Excludes...)
-	excludeMatchers := make([]globMatcher, 0, len(excludePatterns))
-	for _, p := range excludePatterns {
-		m, err := compileGlob(p)
-		if err != nil {
-			return nil, true, fmt.Errorf("invalid exclude pattern %q: %w", p, err)
-		}
-		excludeMatchers = append(excludeMatchers, m)
+	excludeMatchers, err := compileExcludeMatchers(append(append([]string(nil), DefaultExcludePatterns...), config.Excludes...))
+	if err != nil {
+		return nil, true, err
 	}
 
 	seen := map[string]struct{}{}
@@ -87,10 +78,7 @@ func ResolveProjectSources(projectDir string, config *C3ProjectConfig) (files []
 		}
 		for _, relPath := range matches {
 			abs := filepath.Join(canonicalRoot, relPath)
-			if !isC3SourceFile(abs) {
-				continue
-			}
-			if isExcluded(canonicalRoot, relPath, excludeMatchers) {
+			if !isC3SourceFile(abs) || isExcluded(relPath, excludeMatchers) {
 				continue
 			}
 			if _, ok := seen[abs]; ok {
@@ -114,15 +102,9 @@ func ScanProjectFallback(projectDir string, extraExcludes []string) ([]string, e
 		return nil, fmt.Errorf("resolving project root: %w", err)
 	}
 
-	excludePatterns := append([]string(nil), DefaultExcludePatterns...)
-	excludePatterns = append(excludePatterns, extraExcludes...)
-	excludeMatchers := make([]globMatcher, 0, len(excludePatterns))
-	for _, p := range excludePatterns {
-		m, err := compileGlob(p)
-		if err != nil {
-			return nil, fmt.Errorf("invalid exclude pattern %q: %w", p, err)
-		}
-		excludeMatchers = append(excludeMatchers, m)
+	excludeMatchers, err := compileExcludeMatchers(append(append([]string(nil), DefaultExcludePatterns...), extraExcludes...))
+	if err != nil {
+		return nil, err
 	}
 
 	var files []string
@@ -139,10 +121,8 @@ func ScanProjectFallback(projectDir string, extraExcludes []string) ([]string, e
 		if d.IsDir() {
 			// Exclude applies to directories too so we can short-circuit.
 			rel, relErr := filepath.Rel(canonicalRoot, path)
-			if relErr == nil && rel != "." {
-				if isExcluded(canonicalRoot, rel, excludeMatchers) {
-					return filepath.SkipDir
-				}
+			if relErr == nil && rel != "." && isExcluded(rel, excludeMatchers) {
+				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -152,10 +132,7 @@ func ScanProjectFallback(projectDir string, extraExcludes []string) ([]string, e
 		}
 
 		rel, relErr := filepath.Rel(canonicalRoot, path)
-		if relErr != nil {
-			return nil
-		}
-		if isExcluded(canonicalRoot, rel, excludeMatchers) {
+		if relErr != nil || isExcluded(rel, excludeMatchers) {
 			return nil
 		}
 
@@ -170,19 +147,30 @@ func ScanProjectFallback(projectDir string, extraExcludes []string) ([]string, e
 	return files, nil
 }
 
+func compileExcludeMatchers(patterns []string) ([]globMatcher, error) {
+	matchers := make([]globMatcher, 0, len(patterns))
+	for _, p := range patterns {
+		m, err := compileGlob(p)
+		if err != nil {
+			return nil, fmt.Errorf("invalid exclude pattern %q: %w", p, err)
+		}
+		matchers = append(matchers, m)
+	}
+	return matchers, nil
+}
+
 func isC3SourceFile(path string) bool {
 	ext := filepath.Ext(path)
 	return ext == ".c3" || ext == ".c3i"
 }
 
-func isExcluded(root, relPath string, matchers []globMatcher) bool {
+func isExcluded(relPath string, matchers []globMatcher) bool {
 	if relPath == "" || relPath == "." {
 		return false
 	}
 	normalized := filepath.ToSlash(relPath)
-	pathSegs := strings.Split(normalized, "/")
 	for _, m := range matchers {
-		if m.matchesAnyUnder(pathSegs) {
+		if m.matchesAnyUnder(normalized) {
 			return true
 		}
 	}
@@ -190,126 +178,90 @@ func isExcluded(root, relPath string, matchers []globMatcher) bool {
 }
 
 // expandSourcePattern walks the matched paths for a single "sources" entry.
-// Each pattern is interpreted relative to the project root. A trailing "/**"
-// is treated as "match everything beneath".
+// Each pattern is interpreted relative to the project root. A directory entry
+// ("src") and a trailing "/**" pattern ("src/**") both expand recursively to
+// every file beneath the directory, matching the C3 compiler, which treats a
+// directory in "sources" as "all sources under it". The exclude stage filters
+// out nested build trees (build/, out/, .git/, ...).
 func expandSourcePattern(root, pattern string) ([]string, error) {
 	cleanPattern := filepath.ToSlash(filepath.Clean(pattern))
 	cleanPattern = strings.TrimPrefix(cleanPattern, "/")
 
-	// Special handling: trailing /** -> walk the directory matching everything
-	// underneath (and the dir itself, for completeness).
 	if strings.HasSuffix(cleanPattern, "/**") {
 		prefix := strings.TrimSuffix(cleanPattern, "/**")
-		base := filepath.Join(root, filepath.FromSlash(prefix))
-		info, err := os.Stat(base)
-		if err != nil {
-			if os.IsNotExist(err) {
-				// Pattern references a missing path; warn the caller via
-				// error so they can log it, but don't fail the whole index.
-				return nil, nil
-			}
-			return nil, err
-		}
-		if !info.IsDir() {
-			// Not a directory: nothing to expand.
-			return nil, nil
-		}
-		var matches []string
-		walkErr := filepath.WalkDir(base, func(path string, d fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return nil
-			}
-			if path == base {
-				return nil
-			}
-			rel, relErr := filepath.Rel(root, path)
-			if relErr != nil {
-				return nil
-			}
-			matches = append(matches, filepath.ToSlash(rel))
-			return nil
-		})
-		if walkErr != nil {
-			return nil, walkErr
-		}
-		return matches, nil
+		return walkFilesUnder(root, filepath.Join(root, filepath.FromSlash(prefix)))
 	}
 
-	// Special handling: a "directory" pattern (no glob chars) -> expand to
-	// every .c3/.c3i file directly inside it. This matches the common C3
-	// convention of "sources": ["src"] meaning "every C3 file directly
-	// under src", without recursing into nested build directories. The
-	// exclude stage handles unwanted nested dirs.
 	if !containsGlobChar(cleanPattern) {
 		base := filepath.Join(root, filepath.FromSlash(cleanPattern))
 		info, err := os.Stat(base)
 		if err != nil {
 			if os.IsNotExist(err) {
+				// Pattern references a missing path: treat as no matches.
 				return nil, nil
 			}
 			return nil, err
 		}
 		if !info.IsDir() {
-			// Plain file reference: include if it's a source file, else
-			// ignore (handled by caller via isC3SourceFile).
+			// Single-file entry; the caller filters out non-source files.
 			rel, relErr := filepath.Rel(root, base)
 			if relErr != nil {
 				return nil, nil
 			}
 			return []string{filepath.ToSlash(rel)}, nil
 		}
-
-		var matches []string
-		entries, err := os.ReadDir(base)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			rel, relErr := filepath.Rel(root, filepath.Join(base, e.Name()))
-			if relErr != nil {
-				continue
-			}
-			matches = append(matches, filepath.ToSlash(rel))
-		}
-		return matches, nil
+		return walkFilesUnder(root, base)
 	}
 
-	// General glob: walk the root and collect everything that matches.
+	// General glob: walk the root and keep matching files.
 	matcher, err := compileGlob(cleanPattern)
 	if err != nil {
 		return nil, err
 	}
 	var matches []string
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
-			}
+		if walkErr != nil || d.IsDir() {
 			return nil
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
 			return nil
 		}
-		if rel == "." {
-			return nil
-		}
-		if d.IsDir() {
-			// Prune: don't descend into dirs that obviously can't match
-			// (cheap directory-name check against the first path segment
-			// of the glob).
-			if !matcher.couldMatchDir(filepath.Base(rel)) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
 		normalized := filepath.ToSlash(rel)
 		if matcher.matches(normalized) {
 			matches = append(matches, normalized)
 		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	return matches, nil
+}
+
+// walkFilesUnder returns the relative paths of every file beneath base.
+func walkFilesUnder(root, base string) ([]string, error) {
+	info, err := os.Stat(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, nil
+	}
+
+	var matches []string
+	walkErr := filepath.WalkDir(base, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() || path == base {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		matches = append(matches, filepath.ToSlash(rel))
 		return nil
 	})
 	if walkErr != nil {

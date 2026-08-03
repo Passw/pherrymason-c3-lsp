@@ -43,6 +43,29 @@ func TestGlobMatcher(t *testing.T) {
 	}
 }
 
+func TestGlobMatcherMatchesAnyUnder(t *testing.T) {
+	cases := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		{"build", "build", true},
+		{"build", "build/x.c3", true},
+		{"build", "src/build/x.c3", true},
+		{"build", "src/x.c3", false},
+		{"build/**", "build/x.c3", true},
+		{"build/**", "src/build/x.c3", false},
+		{"src/excluded/**", "src/excluded/x.c3", true},
+		{"src/excluded/**", "src/kept/x.c3", false},
+	}
+
+	for _, tc := range cases {
+		m, err := compileGlob(tc.pattern)
+		require.NoError(t, err, "compile %q", tc.pattern)
+		assert.Equalf(t, tc.want, m.matchesAnyUnder(tc.path), "pattern=%q path=%q", tc.pattern, tc.path)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -85,6 +108,7 @@ func TestResolveProjectSources_TargetsSourcesUsedWhenNoTopLevelSources(t *testin
 	assert.ElementsMatch(t,
 		[]string{
 			filepath.Join(tmp, "src/a.c3"),
+			filepath.Join(tmp, "src/sub/b.c3"),
 			filepath.Join(tmp, "cli/main.c3"),
 		},
 		files,
@@ -125,10 +149,11 @@ func TestResolveProjectSources_DirectoryPattern(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]string{
 			filepath.Join(tmp, "src/a.c3"),
+			filepath.Join(tmp, "src/sub/b.c3"),
 			filepath.Join(tmp, "src/c.c3i"),
 		},
 		files,
-		"directory pattern should only pick up top-level entries",
+		"directory pattern should expand recursively, matching c3c",
 	)
 }
 
@@ -145,6 +170,25 @@ func TestResolveProjectSources_ExcludeBuiltDirs(t *testing.T) {
 	assert.ElementsMatch(t,
 		[]string{filepath.Join(tmp, "src/a.c3")},
 		files,
+	)
+}
+
+func TestResolveProjectSources_ExcludeNestedBuildDir(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "src/a.c3"), "module a;")
+	writeFile(t, filepath.Join(tmp, "src/build/x.c3"), "module x;")
+	writeFile(t, filepath.Join(tmp, "src/sub/y.c3"), "module y;")
+
+	cfg := &C3ProjectConfig{Sources: []string{"src"}}
+	files, _, err := ResolveProjectSources(tmp, cfg)
+	require.NoError(t, err)
+	assert.ElementsMatch(t,
+		[]string{
+			filepath.Join(tmp, "src/a.c3"),
+			filepath.Join(tmp, "src/sub/y.c3"),
+		},
+		files,
+		"nested build directories should be excluded like top-level ones",
 	)
 }
 
