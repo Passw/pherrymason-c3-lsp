@@ -19,10 +19,18 @@ import (
 // Patterns are interpreted relative to the project.json location. A pattern
 // starting with `/` is treated as relative to the project root after the slash.
 type C3ProjectConfig struct {
-	DependencySearchPaths []string `json:"dependency-search-paths"`
-	Dependencies          []string `json:"dependencies"`
-	Sources               []string `json:"sources"`
-	Excludes              []string `json:"excludes"`
+	DependencySearchPaths []string                  `json:"dependency-search-paths"`
+	Dependencies          []string                  `json:"dependencies"`
+	Sources               []string                  `json:"sources"`
+	Excludes              []string                  `json:"excludes"`
+	Targets               map[string]C3TargetConfig `json:"targets"`
+}
+
+// C3TargetConfig captures the fields the LSP cares about from a build target.
+// The C3 compiler allows per-target overrides of any global setting, including
+// the source list, so projects often declare their sources only here.
+type C3TargetConfig struct {
+	Sources []string `json:"sources"`
 }
 
 // DefaultExcludePatterns are patterns that are always excluded from project

@@ -32,7 +32,28 @@ func ResolveProjectSources(projectDir string, config *C3ProjectConfig) (files []
 	}
 
 	hasConfig = true
-	if len(config.Sources) == 0 {
+
+	// Sources may be declared at the top level (applied to all targets) or
+	// per-target under "targets". When no top-level "sources" is declared,
+	// collect the per-target lists. Pattern order across targets is
+	// non-deterministic, so de-duplicate them.
+	patterns := config.Sources
+	if len(patterns) == 0 {
+		seen := map[string]struct{}{}
+		for _, target := range config.Targets {
+			for _, p := range target.Sources {
+				if p == "" {
+					continue
+				}
+				if _, ok := seen[p]; ok {
+					continue
+				}
+				seen[p] = struct{}{}
+				patterns = append(patterns, p)
+			}
+		}
+	}
+	if len(patterns) == 0 {
 		return nil, true, nil
 	}
 
@@ -56,7 +77,7 @@ func ResolveProjectSources(projectDir string, config *C3ProjectConfig) (files []
 	}
 
 	seen := map[string]struct{}{}
-	for _, pattern := range config.Sources {
+	for _, pattern := range patterns {
 		if pattern == "" {
 			continue
 		}

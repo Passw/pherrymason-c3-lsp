@@ -75,38 +75,38 @@ func (h *Server) indexWorkspace() {
 	canonicalPath := fs.GetCanonicalPath(path)
 
 	// Decide the project source set:
-	//   - if project.json declares "sources": expand those patterns
-	//   - if project.json exists but has no "sources": warn and skip project
-	//     source indexing — dependency libraries still load below
+	//   - if project.json declares "sources" (top-level or per-target):
+	//     expand those patterns
+	//   - if project.json exists but declares no sources at all: skip
+	//     project source indexing (the directory walk would pick up
+	//     unrelated trees such as git worktrees)
 	//   - if there is no project.json at all: fall back to the original
 	//     directory walk, minus the default-excluded build / .git trees
 	config, err := fs.ReadC3ProjectConfig(canonicalPath)
 	if err != nil {
-		h.server.Log.Warningf("Failed to read project.json: %v", err)
+		h.server.Log.Warningf("Failed to read project.json, falling back to directory walk: %v", err)
 	}
 
 	var files []string
-
-	switch {
-	case config == nil:
-		h.server.Log.Infof("project.json: not found — falling back to directory walk with default excludes")
+	if config == nil {
+		if err == nil {
+			h.server.Log.Infof("project.json: not found — falling back to directory walk with default excludes")
+		}
 		fallback, fallbackErr := fs.ScanProjectFallback(canonicalPath, nil)
 		if fallbackErr != nil {
 			h.server.Log.Warningf("Failed to scan workspace: %v", fallbackErr)
 		} else {
 			files = fallback
 		}
-	default:
-		resolved, hasConfig, resolveErr := fs.ResolveProjectSources(canonicalPath, config)
+	} else {
+		resolved, _, resolveErr := fs.ResolveProjectSources(canonicalPath, config)
 		if resolveErr != nil {
 			h.server.Log.Warningf("Failed to resolve project sources: %v", resolveErr)
-			break
+		} else if len(resolved) == 0 {
+			h.server.Log.Warningf("project.json: no \"sources\" declared (top-level or in targets) — skipping project source indexing. Add a \"sources\" array to project.json to enable project-wide features.")
+		} else {
+			files = resolved
 		}
-		if hasConfig && len(config.Sources) == 0 {
-			h.server.Log.Warningf("project.json: no \"sources\" declared — skipping project source indexing. Add a \"sources\" array to project.json to enable project-wide features.")
-			break
-		}
-		files = resolved
 	}
 
 	for _, filePath := range files {

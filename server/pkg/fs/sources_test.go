@@ -66,6 +66,32 @@ func TestResolveProjectSources_ProjectJsonNoSources(t *testing.T) {
 	assert.Nil(t, files, "no sources declared -> nothing indexed")
 }
 
+func TestResolveProjectSources_TargetsSourcesUsedWhenNoTopLevelSources(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "src/a.c3"), "module a;")
+	writeFile(t, filepath.Join(tmp, "src/sub/b.c3"), "module b;")
+	writeFile(t, filepath.Join(tmp, "cli/main.c3"), "module main;")
+	writeFile(t, filepath.Join(tmp, "docs/notes.md"), "nope")
+
+	cfg := &C3ProjectConfig{
+		Targets: map[string]C3TargetConfig{
+			"app": {Sources: []string{"src", "cli/main.c3"}},
+			"dev": {Sources: []string{"src"}},
+		},
+	}
+	files, hasConfig, err := ResolveProjectSources(tmp, cfg)
+	require.NoError(t, err)
+	assert.True(t, hasConfig)
+	assert.ElementsMatch(t,
+		[]string{
+			filepath.Join(tmp, "src/a.c3"),
+			filepath.Join(tmp, "cli/main.c3"),
+		},
+		files,
+		"per-target sources should be collected and deduplicated",
+	)
+}
+
 func TestResolveProjectSources_TrailingStarStar(t *testing.T) {
 	tmp := t.TempDir()
 	writeFile(t, filepath.Join(tmp, "src/a.c3"), "module a;")
