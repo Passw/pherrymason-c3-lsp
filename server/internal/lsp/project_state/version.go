@@ -9,20 +9,17 @@ import (
 // SupportedC3Version: The C3 language version supported by the LSP.
 const SupportedC3Version = "0.8.2"
 
-// LoadStdLib loads the standard library symbols for the given version.
-// It will attempt to load the stdlib cache for the specified version or build it if not found.
-func LoadStdLib(logger commonlog.Logger, version string, c3cLibPath string) symbols_table.UnitModules {
-	// Get detected c3c binary version if available
+// LoadStdLibByFile loads the standard library, returning one UnitModules per
+// source file so that modules defined across multiple files are kept separate
+// (as they are for workspace files). This avoids the overwrite problem that
+// occurs when all modules share a single UnitModules entry.
+//
+// Uses disk and in-memory caching to avoid re-indexing on every startup.
+func LoadStdLibByFile(logger commonlog.Logger, version string, c3cLibPath string) []symbols_table.UnitModules {
 	detectedVersion := stdlib.GetDetectedC3Version()
-
-	// Warn if user's version doesn't match the detected binary version
 	if detectedVersion != "" && detectedVersion != version {
 		logger.Warningf("Requested C3 version %s does not match detected c3c binary version %s", version, detectedVersion)
-		logger.Warning("This may cause inconsistencies. Consider updating your configuration.")
 	}
-
-	// Attempt to load stdlib for the requested version
-	// This will try to load from cache, or build it if c3c path is configured
 	logger.Infof("Loading stdlib for C3 version %s...", version)
-	return stdlib.LoadStdlib(logger, version, c3cLibPath)
+	return stdlib.LoadOrBuildStdlibByFile(logger, version, c3cLibPath)
 }

@@ -41,11 +41,24 @@ func (s *Search) findSymbolsInScope(params FindSymbolsParams, state *p.ProjectSt
 		}
 	}
 
-	if params.scopedToModulePath.IsSome() && currentModule != nil {
+	if params.scopedToModulePath.IsSome() {
 		// We must take into account that scopedModule path might be a partial path module
-		for _, importedModule := range currentModule.Imports {
-			if strings.HasSuffix(importedModule, params.scopedToModulePath.Get().GetName()) {
-				currentContextModules = append(currentContextModules, symbols.NewModulePathFromString(importedModule))
+		if currentModule != nil {
+			for _, importedModule := range currentModule.Imports {
+				if strings.HasSuffix(importedModule, params.scopedToModulePath.Get().GetName()) {
+					currentContextModules = append(currentContextModules, symbols.NewModulePathFromString(importedModule))
+				}
+			}
+		} else {
+			// Fallback: scan all modules' imports when cursor position
+			// doesn't fall within any parsed module's range (e.g. incomplete
+			// expression causes tree-sitter ERROR node).
+			for _, module := range state.GetUnitModulesByDoc(params.docId).Modules() {
+				for _, importedModule := range module.Imports {
+					if strings.HasSuffix(importedModule, params.scopedToModulePath.Get().GetName()) {
+						currentContextModules = append(currentContextModules, symbols.NewModulePathFromString(importedModule))
+					}
+				}
 			}
 		}
 

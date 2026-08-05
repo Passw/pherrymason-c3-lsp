@@ -95,36 +95,36 @@ func isCompletingAChain(doc *document.Document, cursorPosition symbols.Position)
 }
 
 func extractExplicitModulePath(possibleModulePath string) option.Option[symbols.ModulePath] {
-	// Read backwards until a separator character is found.
-	lastCharIndex := len(possibleModulePath) - 1
-	firstDoubleColonFound := -1
-	separatorsInARow := 0
-
-	for i := lastCharIndex; i >= 0; i-- {
-		r := rune(possibleModulePath[i])
-		//fmt.Printf("%c\n", r)
-		if firstDoubleColonFound == -1 {
-			if r == ':' {
-				separatorsInARow++
-			}
-
-			if separatorsInARow == 2 {
-				firstDoubleColonFound = i
-			}
-		}
-
-		if r != ':' {
-			separatorsInARow = 0
-		}
-
-		if r == '.' {
-			break
-		}
+	if possibleModulePath == "" {
+		return option.None[symbols.ModulePath]()
 	}
 
-	if firstDoubleColonFound != -1 {
-		return option.Some(symbols.NewModulePathFromString(possibleModulePath[0:firstDoubleColonFound]))
+	// Case 1: single trailing colon (but NOT '::') — the editor fires completion on the
+	// first ':' of '::' before the second one is typed.
+	// Everything before the ':' is the complete module path.
+	// Example: "std::core::mem:" → "std::core::mem"
+	// Reject if prefix is empty or contains '.' (chain separator, not a module path).
+	if strings.HasSuffix(possibleModulePath, ":") && !strings.HasSuffix(possibleModulePath, "::") {
+		prefix := possibleModulePath[:len(possibleModulePath)-1]
+		if prefix == "" || strings.Contains(prefix, ".") {
+			return option.None[symbols.ModulePath]()
+		}
+		return option.Some(symbols.NewModulePathFromString(prefix))
 	}
+
+	// Case 2: string contains '::' — the part before the last '::' is the module path.
+	// This covers:
+	//   "mem::"            → "mem"
+	//   "std::core::mem::" → "std::core::mem"
+	//   "mem::malloc"      → "mem"   (user is typing a symbol after '::')
+	if idx := strings.LastIndex(possibleModulePath, "::"); idx != -1 {
+		prefix := possibleModulePath[:idx]
+		if prefix == "" || strings.Contains(prefix, ".") {
+			return option.None[symbols.ModulePath]()
+		}
+		return option.Some(symbols.NewModulePathFromString(prefix))
+	}
+
 	return option.None[symbols.ModulePath]()
 }
 
@@ -473,17 +473,16 @@ func (s *Search) BuildCompletionList(
 
 		for _, storedIdentifier := range scopeSymbols {
 			hasPrefix := strings.HasPrefix(storedIdentifier.GetName(), symbolInPosition.Text())
+			if !hasPrefix && storedIdentifier.GetKind() == protocol.CompletionItemKindModule {
+				// Modules are stored as full paths (e.g. "std::io") but users
+				// reference them by short name (e.g. "io"). Match by suffix too.
+				hasPrefix = strings.HasSuffix(storedIdentifier.GetName(), "::"+symbolInPosition.Text())
+			}
 			if filterMembers && !hasPrefix {
 				continue
 			}
 
 			if storedIdentifier.GetKind() == protocol.CompletionItemKindModule {
-				/*fullSymbolAtCursor, _ := doc.SymbolBeforeCursor(
-					symbols.Position{
-						Line:      uint(position.Line),
-						Character: uint(position.Character) - 1,
-					})
-				fullSymbolAtCursor.AdvanceEndCharacter()*/
 				editRange := symbolInPosition.FullTextRange().ToLSP()
 
 				items = append(items, protocol.CompletionItem{

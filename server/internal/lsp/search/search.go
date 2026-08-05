@@ -400,9 +400,8 @@ func (l Search) findModuleNameInTraversedModules(searchParams search_params.Sear
 	for _, parsedModulesByDoc := range projState.GetAllUnitModules() {
 		for _, module := range parsedModulesByDoc.Modules() {
 
-			if module.GetName() == moduleName {
-				_, ok := traversedModules[moduleName]
-				if ok {
+			if module.GetName() == moduleName || strings.HasSuffix(module.GetName(), "::"+moduleName) {
+				if _, ok := traversedModules[module.GetName()]; ok {
 					matches = append(matches, module)
 				}
 			}

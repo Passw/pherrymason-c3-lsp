@@ -13,10 +13,13 @@ import (
 func (h *Server) TextDocumentHover(context *glsp.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
 	pos := symbols.NewPositionFromLSPPosition(params.Position)
 	docId := utils.NormalizePath(params.TextDocument.URI)
+	h.server.Log.Infof("hover request: doc=%s pos=(%d,%d)", docId, params.Position.Line, params.Position.Character)
 	foundSymbolOption := h.search.FindSymbolDeclarationInWorkspace(docId, pos, h.state)
 	if foundSymbolOption.IsNone() {
+		h.server.Log.Infof("  hover: symbol not found")
 		return nil, nil
 	}
+	h.server.Log.Infof("  hover: found %q in module %q", foundSymbolOption.Get().GetName(), foundSymbolOption.Get().GetModuleString())
 
 	foundSymbol := foundSymbolOption.Get()
 

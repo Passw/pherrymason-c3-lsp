@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 
 	"github.com/pherrymason/c3-lsp/pkg/document"
 	"github.com/pherrymason/c3-lsp/pkg/fs"
@@ -18,6 +19,12 @@ import (
 // Global configuration for C3C library path
 var c3cLibPath string
 var detectedC3Version string
+
+// In-memory stdlib cache to avoid re-indexing on every LSP restart.
+var (
+	memCacheMu     sync.RWMutex
+	memCache       = make(map[string][]symbols_table.UnitModules)
+)
 
 // SetC3CLibPath sets the global C3C library path and detects the installed version
 func SetC3CLibPath(logger commonlog.Logger, path string) {
@@ -62,32 +69,76 @@ func detectVersionFromPath(logger commonlog.Logger, libPath string) string {
 	return ""
 }
 
-// StdlibCache represents the cached stdlib index
-type StdlibCache struct {
-	Version string            `json:"version"`
+// LoadStdlibByFile indexes the C3 standard library from source files,
+// returning one UnitModules per source file. This is the correct approach
+// because multiple source files can contribute to the same module name
+// (e.g. std::core::mem in mem.c3 and mem_mempool.c3), and a flat
+// RegisterModule call would overwrite earlier entries.
+//
+// Returns an empty slice (no error) if c3cLibPath is empty.
+//
+// Prefer LoadOrBuildStdlibByFile which adds disk caching on top.
+func LoadStdlibByFile(logger commonlog.Logger, version string, c3cLibPath string) []symbols_table.UnitModules {
+	if c3cLibPath == "" {
+		logger.Warningf("No stdlib path configured for version %s — stdlib completions unavailable.", version)
+		logger.Warning("Set c3.path in c3lsp.json to your c3c binary, or c3.stdlib-path to the lib/c3 directory.")
+		return nil
+	}
+
+	baseLibPath := fs.GetCanonicalPath(c3cLibPath)
+	files, err := fs.ScanForC3(filepath.Join(baseLibPath, "std"))
+	if err != nil {
+		logger.Warningf("Failed to scan stdlib at %s: %v", baseLibPath, err)
+		return nil
+	}
+
+	logger.Infof("Indexing %d stdlib source files from %s ...", len(files), baseLibPath)
+	parser := p.NewParser(logger)
+
+	var result []symbols_table.UnitModules
+	for _, filePath := range files {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			logger.Warningf("Could not read %s: %v", filePath, err)
+			continue
+		}
+		doc := document.NewDocumentFromString(filePath, string(content))
+		modules, _ := parser.ParseSymbols(&doc)
+		result = append(result, modules)
+	}
+
+	logger.Infof("Stdlib indexed: %d files", len(result))
+	return result
+}
+
+// --- Cache types and functions ---
+
+// StdlibFileEntry is a serializable entry for one stdlib source file.
+type StdlibFileEntry struct {
 	DocId   string            `json:"doc_id"`
 	Modules []*symbols.Module `json:"modules"`
 }
 
-// GetStdlibCachePath returns the path where stdlib cache files are stored
+// StdlibCache is the disk-cache representation for a stdlib version.
+type StdlibCache struct {
+	Version string             `json:"version"`
+	Files   []StdlibFileEntry  `json:"files"`
+}
+
+// GetStdlibCachePath returns the path where stdlib cache files are stored.
 func GetStdlibCachePath() (string, error) {
-	// Try to get cache directory based on OS
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-
 	stdlibDir := filepath.Join(cacheDir, "c3-lsp", "stdlib")
-
-	// Ensure directory exists
 	if err := os.MkdirAll(stdlibDir, 0755); err != nil {
 		return "", err
 	}
-
 	return stdlibDir, nil
 }
 
-// GetStdlibCacheFile returns the full path to a specific version's cache file
+// GetStdlibCacheFile returns the full path to a specific version's cache file.
 func GetStdlibCacheFile(version string) (string, error) {
 	dir, err := GetStdlibCachePath()
 	if err != nil {
@@ -96,68 +147,59 @@ func GetStdlibCacheFile(version string) (string, error) {
 	return filepath.Join(dir, fmt.Sprintf("stdlib_%s.json", version)), nil
 }
 
-// LoadStdlibFromCache attempts to load stdlib from a cache file
-func LoadStdlibFromCache(logger commonlog.Logger, version string) (*symbols_table.UnitModules, error) {
+// loadStdlibFromCache attempts to load stdlib UnitModules from the disk cache.
+func loadStdlibFromCache(logger commonlog.Logger, version string) ([]symbols_table.UnitModules, error) {
 	cacheFile, err := GetStdlibCacheFile(version)
 	if err != nil {
-		logger.Debugf("Failed to get stdlib cache file path: %v", err)
 		return nil, fmt.Errorf("failed to get cache file path: %w", err)
 	}
 
-	logger.Debugf("Looking for stdlib cache at: %s", cacheFile)
-
-	// Check if file exists
-	if _, err := os.Stat(cacheFile); os.IsNotExist(err) {
-		logger.Debugf("Stdlib cache file does not exist: %s", cacheFile)
-		return nil, fmt.Errorf("cache file does not exist: %s", cacheFile)
-	}
-
-	logger.Debugf("Found stdlib cache file, attempting to load...")
-
-	// Read and parse cache file
 	data, err := os.ReadFile(cacheFile)
 	if err != nil {
-		logger.Warningf("Failed to read stdlib cache file: %v", err)
 		return nil, fmt.Errorf("failed to read cache file: %w", err)
 	}
 
 	var cache StdlibCache
 	if err := json.Unmarshal(data, &cache); err != nil {
-		logger.Warningf("Failed to parse stdlib cache file: %v", err)
-		return nil, fmt.Errorf("failed to parse cache file: %w", err)
+		return nil, fmt.Errorf("failed to parse cache: %w", err)
 	}
 
-	// Verify version matches
 	if cache.Version != version {
-		logger.Warningf("Stdlib cache version mismatch: expected %s, got %s", version, cache.Version)
 		return nil, fmt.Errorf("cache version mismatch: expected %s, got %s", version, cache.Version)
 	}
 
-	logger.Infof("Successfully loaded stdlib cache for version %s (%d modules)", version, len(cache.Modules))
-
-	// Reconstruct UnitModules from cache
-	docId := cache.DocId
-	modules := symbols_table.NewParsedModules(&docId)
-	for _, mod := range cache.Modules {
-		modules.RegisterModule(mod)
+	var result []symbols_table.UnitModules
+	for _, entry := range cache.Files {
+		docId := entry.DocId
+		um := symbols_table.NewParsedModules(&docId)
+		for _, mod := range entry.Modules {
+			um.RegisterModule(mod)
+		}
+		result = append(result, um)
 	}
 
-	return &modules, nil
+	logger.Infof("Loaded stdlib from cache: version %s, %d files, %d modules", version, len(result), len(cache.Files))
+	return result, nil
 }
 
-// SaveStdlibToCache saves stdlib index to a cache file
-func SaveStdlibToCache(logger commonlog.Logger, version string, modules *symbols_table.UnitModules) error {
+// saveStdlibToCache saves stdlib UnitModules to the disk cache.
+func saveStdlibToCache(logger commonlog.Logger, version string, unitModules []symbols_table.UnitModules) error {
 	cacheFile, err := GetStdlibCacheFile(version)
 	if err != nil {
 		return fmt.Errorf("failed to get cache file path: %w", err)
 	}
 
-	logger.Debugf("Saving stdlib cache to: %s", cacheFile)
+	var entries []StdlibFileEntry
+	for _, um := range unitModules {
+		entries = append(entries, StdlibFileEntry{
+			DocId:   um.DocId(),
+			Modules: um.Modules(),
+		})
+	}
 
 	cache := StdlibCache{
 		Version: version,
-		DocId:   modules.DocId(),
-		Modules: modules.Modules(),
+		Files:   entries,
 	}
 
 	data, err := json.Marshal(cache)
@@ -169,103 +211,56 @@ func SaveStdlibToCache(logger commonlog.Logger, version string, modules *symbols
 		return fmt.Errorf("failed to write cache file: %w", err)
 	}
 
-	logger.Infof("Successfully saved stdlib cache for version %s (%d modules, %.2f MB)",
-		version, len(cache.Modules), float64(len(data))/(1024*1024))
-
+	logger.Infof("Saved stdlib cache: version %s, %d files (%.2f MB)", version, len(entries), float64(len(data))/(1024*1024))
 	return nil
 }
 
-// BuildStdlibIndex builds the stdlib index from C3 source files
-func BuildStdlibIndex(c3cLibPath string, version string) (*symbols_table.UnitModules, error) {
-	baseLibPath := fs.GetCanonicalPath(c3cLibPath)
-	files, err := fs.ScanForC3(filepath.Join(baseLibPath, "std"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan for C3 files: %w", err)
+// LoadOrBuildStdlibByFile loads stdlib from in-memory cache, then disk cache,
+// and falls back to indexing from source. The result is cached in memory and
+// persisted to disk for future sessions.
+func LoadOrBuildStdlibByFile(logger commonlog.Logger, version string, c3cLibPath string) []symbols_table.UnitModules {
+	// 1. In-memory cache
+	memCacheMu.RLock()
+	if cached, ok := memCache[version]; ok {
+		memCacheMu.RUnlock()
+		logger.Debugf("Stdlib %s served from in-memory cache (%d files)", version, len(cached))
+		return cached
 	}
+	memCacheMu.RUnlock()
 
-	commonlog.Configure(2, nil)
-	logger := commonlog.GetLogger("")
-	parser := p.NewParser(logger)
-
-	docId := "_stdlib_" + version
-	parsedModules := symbols_table.NewParsedModules(&docId)
-
-	for _, filePath := range files {
-		content, err := os.ReadFile(filePath)
-		if err != nil {
-			return nil, fmt.Errorf("could not read file %s: %w", filePath, err)
-		}
-
-		doc := document.NewDocumentFromString(filePath, string(content))
-		modules, pendingTypes := parser.ParseSymbols(&doc)
-
-		// Merge modules into parsedModules
-		for _, mod := range modules.Modules() {
-			parsedModules.RegisterModule(mod)
-		}
-
-		// Note: pendingTypes handling might need adjustment based on your needs
-		_ = pendingTypes
-	}
-
-	return &parsedModules, nil
-}
-
-// LoadOrBuildStdlib attempts to load stdlib from cache, or builds it if not found
-func LoadOrBuildStdlib(logger commonlog.Logger, c3cLibPath string, version string) (symbols_table.UnitModules, error) {
-	// Try to load from cache first
-	modules, err := LoadStdlibFromCache(logger, version)
-	if err == nil {
-		return *modules, nil
-	}
-
-	logger.Infof("Cache not found or invalid for stdlib %s, building index...", version)
-
-	// Build index from source using provided path
-	modules, err = BuildStdlibIndex(c3cLibPath, version)
-	if err != nil {
-		return symbols_table.UnitModules{}, fmt.Errorf("failed to build stdlib index: %w", err)
-	}
-
-	// Save to cache for future use
-	if err := SaveStdlibToCache(logger, version, modules); err != nil {
-		logger.Warningf("Failed to save stdlib cache: %v", err)
-		// Continue anyway - we have the index in memory
-	}
-
-	return *modules, nil
-}
-
-// LoadStdlib tries to load stdlib from cache first, then builds from sources if needed
-func LoadStdlib(logger commonlog.Logger, version string, c3cLibPath string) symbols_table.UnitModules {
-	// Check if we have a detected C3 version
-	detectedVersion := GetDetectedC3Version()
-
-	// Try to build from sources if we have c3c path configured
-	if c3cLibPath != "" {
-		// Try to load from cache or build from sources
-		logger.Infof("Attempting to load or build stdlib index for version %s...", version)
-		modules, err := LoadOrBuildStdlib(logger, c3cLibPath, version)
-		if err == nil {
-			return modules
-		}
-		logger.Warningf("Failed to load/build stdlib for version %s: %v", version, err)
-	}
-
-	// Try to load from cache only (user may have manually created it)
-	modules, err := LoadStdlibFromCache(logger, version)
-	if err == nil {
-		return *modules
-	}
-
-	// No stdlib available - return empty
-	logger.Warningf("No stdlib available for version %s.", version)
-	if detectedVersion != "" {
-		logger.Warningf("C3 binary version %s detected but stdlib could not be indexed.", detectedVersion)
-		logger.Warning("Please ensure c3.path in c3lsp.json points to a valid c3c installation.")
+	// 2. Disk cache
+	if modules, err := loadStdlibFromCache(logger, version); err == nil {
+		memCacheMu.Lock()
+		memCache[version] = modules
+		memCacheMu.Unlock()
+		return modules
 	} else {
-		logger.Warning("To enable stdlib support, configure c3.path in c3lsp.json.")
+		logger.Debugf("Stdlib disk cache miss for %s: %v", version, err)
 	}
-	docId := "_stdlib_" + version
-	return symbols_table.NewParsedModules(&docId)
+
+	// 3. Build from source
+	modules := LoadStdlibByFile(logger, version, c3cLibPath)
+	if modules == nil {
+		return nil
+	}
+
+	// Store in memory
+	memCacheMu.Lock()
+	memCache[version] = modules
+	memCacheMu.Unlock()
+
+	// Persist to disk
+	if err := saveStdlibToCache(logger, version, modules); err != nil {
+		logger.Warningf("Failed to save stdlib cache: %v", err)
+	}
+
+	return modules
+}
+
+// InvalidateStdlibCache removes a version from the in-memory cache.
+// Useful when the stdlib path changes.
+func InvalidateStdlibCache(version string) {
+	memCacheMu.Lock()
+	delete(memCache, version)
+	memCacheMu.Unlock()
 }
