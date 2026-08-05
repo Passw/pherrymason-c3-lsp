@@ -1,0 +1,275 @@
+package fs
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// ResolveProjectSources returns the list of project source files for the given
+// project root. Resolution is driven entirely by project.json:
+//
+//   - If project.json is missing: returns (nil, false, nil) — caller should
+//     decide whether to fall back to a directory walk. The boolean indicates
+//     that no project definition was present.
+//   - If project.json is present and declares "sources": those patterns are
+//     expanded against the project root, files matching any default or
+//     declared exclude pattern are filtered out, only .c3/.c3i files are
+//     kept, and the result is returned sorted and de-duplicated.
+//   - If project.json is present but has no "sources": returns (nil, true, nil)
+//     — caller should treat this as "no project sources declared" and index
+//     nothing as project code.
+//
+// The second return value (hasConfig) lets callers distinguish between "no
+// project.json" and "project.json exists but no sources". Errors are returned
+// only for I/O failures while walking the filesystem.
+func ResolveProjectSources(projectDir string, config *C3ProjectConfig) (files []string, hasConfig bool, err error) {
+	if config == nil {
+		return nil, false, nil
+	}
+
+	hasConfig = true
+
+	// Sources may be declared at the top level (applied to all targets) or
+	// per-target under "targets". When no top-level "sources" is declared,
+	// collect the per-target lists. Pattern order across targets is
+	// non-deterministic, so de-duplicate them.
+	patterns := config.Sources
+	if len(patterns) == 0 {
+		seen := map[string]struct{}{}
+		for _, target := range config.Targets {
+			for _, p := range target.Sources {
+				if p == "" {
+					continue
+				}
+				if _, ok := seen[p]; ok {
+					continue
+				}
+				seen[p] = struct{}{}
+				patterns = append(patterns, p)
+			}
+		}
+	}
+	if len(patterns) == 0 {
+		return nil, true, nil
+	}
+
+	canonicalRoot, err := filepath.Abs(projectDir)
+	if err != nil {
+		return nil, true, fmt.Errorf("resolving project root: %w", err)
+	}
+
+	excludeMatchers, err := compileExcludeMatchers(append(append([]string(nil), DefaultExcludePatterns...), config.Excludes...))
+	if err != nil {
+		return nil, true, err
+	}
+
+	seen := map[string]struct{}{}
+	for _, pattern := range patterns {
+		if pattern == "" {
+			continue
+		}
+		matches, err := expandSourcePattern(canonicalRoot, pattern)
+		if err != nil {
+			return nil, true, fmt.Errorf("expanding source pattern %q: %w", pattern, err)
+		}
+		for _, relPath := range matches {
+			abs := filepath.Join(canonicalRoot, relPath)
+			if !isC3SourceFile(abs) || isExcluded(relPath, excludeMatchers) {
+				continue
+			}
+			if _, ok := seen[abs]; ok {
+				continue
+			}
+			seen[abs] = struct{}{}
+			files = append(files, abs)
+		}
+	}
+
+	sort.Strings(files)
+	return files, true, nil
+}
+
+// ScanProjectFallback performs the original behavior: walk the workspace and
+// return every .c3/.c3i file, minus anything matching the default or supplied
+// exclude patterns. Used as a fallback when a project has no project.json.
+func ScanProjectFallback(projectDir string, extraExcludes []string) ([]string, error) {
+	canonicalRoot, err := filepath.Abs(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolving project root: %w", err)
+	}
+
+	excludeMatchers, err := compileExcludeMatchers(append(append([]string(nil), DefaultExcludePatterns...), extraExcludes...))
+	if err != nil {
+		return nil, err
+	}
+
+	var files []string
+	walkErr := filepath.WalkDir(canonicalRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			// Don't abort the whole walk on a permission error etc.; skip
+			// the offending path and continue.
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if d.IsDir() {
+			// Exclude applies to directories too so we can short-circuit.
+			rel, relErr := filepath.Rel(canonicalRoot, path)
+			if relErr == nil && rel != "." && isExcluded(rel, excludeMatchers) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if !isC3SourceFile(path) {
+			return nil
+		}
+
+		rel, relErr := filepath.Rel(canonicalRoot, path)
+		if relErr != nil || isExcluded(rel, excludeMatchers) {
+			return nil
+		}
+
+		files = append(files, path)
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+
+	sort.Strings(files)
+	return files, nil
+}
+
+func compileExcludeMatchers(patterns []string) ([]globMatcher, error) {
+	matchers := make([]globMatcher, 0, len(patterns))
+	for _, p := range patterns {
+		m, err := compileGlob(p)
+		if err != nil {
+			return nil, fmt.Errorf("invalid exclude pattern %q: %w", p, err)
+		}
+		matchers = append(matchers, m)
+	}
+	return matchers, nil
+}
+
+func isC3SourceFile(path string) bool {
+	ext := filepath.Ext(path)
+	return ext == ".c3" || ext == ".c3i"
+}
+
+func isExcluded(relPath string, matchers []globMatcher) bool {
+	if relPath == "" || relPath == "." {
+		return false
+	}
+	normalized := filepath.ToSlash(relPath)
+	for _, m := range matchers {
+		if m.matchesAnyUnder(normalized) {
+			return true
+		}
+	}
+	return false
+}
+
+// expandSourcePattern walks the matched paths for a single "sources" entry.
+// Each pattern is interpreted relative to the project root. A directory entry
+// ("src") and a trailing "/**" pattern ("src/**") both expand recursively to
+// every file beneath the directory, matching the C3 compiler, which treats a
+// directory in "sources" as "all sources under it". The exclude stage filters
+// out nested build trees (build/, out/, .git/, ...).
+func expandSourcePattern(root, pattern string) ([]string, error) {
+	cleanPattern := filepath.ToSlash(filepath.Clean(pattern))
+	cleanPattern = strings.TrimPrefix(cleanPattern, "/")
+
+	if strings.HasSuffix(cleanPattern, "/**") {
+		prefix := strings.TrimSuffix(cleanPattern, "/**")
+		return walkFilesUnder(root, filepath.Join(root, filepath.FromSlash(prefix)))
+	}
+
+	if !containsGlobChar(cleanPattern) {
+		base := filepath.Join(root, filepath.FromSlash(cleanPattern))
+		info, err := os.Stat(base)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Pattern references a missing path: treat as no matches.
+				return nil, nil
+			}
+			return nil, err
+		}
+		if !info.IsDir() {
+			// Single-file entry; the caller filters out non-source files.
+			rel, relErr := filepath.Rel(root, base)
+			if relErr != nil {
+				return nil, nil
+			}
+			return []string{filepath.ToSlash(rel)}, nil
+		}
+		return walkFilesUnder(root, base)
+	}
+
+	// General glob: walk the root and keep matching files.
+	matcher, err := compileGlob(cleanPattern)
+	if err != nil {
+		return nil, err
+	}
+	var matches []string
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		normalized := filepath.ToSlash(rel)
+		if matcher.matches(normalized) {
+			matches = append(matches, normalized)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	return matches, nil
+}
+
+// walkFilesUnder returns the relative paths of every file beneath base.
+func walkFilesUnder(root, base string) ([]string, error) {
+	info, err := os.Stat(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, nil
+	}
+
+	var matches []string
+	walkErr := filepath.WalkDir(base, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() || path == base {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		matches = append(matches, filepath.ToSlash(rel))
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	return matches, nil
+}
+
+func containsGlobChar(p string) bool {
+	return strings.ContainsAny(p, "*?[")
+}
