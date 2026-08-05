@@ -5,12 +5,12 @@ import (
 
 	"github.com/pherrymason/c3-lsp/pkg/option"
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 func (p *Parser) nodeToBitStruct(node *sitter.Node, currentModule *idx.Module, docId *string, sourceCode []byte) idx.Bitstruct {
 	nameNode := node.ChildByFieldName("name")
-	name := nameNode.Content(sourceCode)
+	name := nameNode.Utf8Text(sourceCode)
 	var interfaces []string
 	var bakedType idx.Type
 
@@ -18,16 +18,16 @@ func (p *Parser) nodeToBitStruct(node *sitter.Node, currentModule *idx.Module, d
 	structFields := p.nodeToBitStructMembers(fieldsNode, currentModule, docId, sourceCode)
 
 	for i := 0; i < int(node.ChildCount()); i++ {
-		child := node.Child(i)
-		//fmt.Println("type:", child.Type(), child.Content(sourceCode))
+		child := node.Child(uint(i))
+		//fmt.Println("type:", child.Kind(), child.Utf8Text(sourceCode))
 
-		switch child.Type() {
+		switch child.Kind() {
 		case "interface_impl":
 			// TODO
 			for x := 0; x < int(child.ChildCount()); x++ {
-				n := child.Child(x)
-				if n.Type() == "interface" {
-					interfaces = append(interfaces, n.Content(sourceCode))
+				n := child.Child(uint(x))
+				if n.Kind() == "interface" {
+					interfaces = append(interfaces, n.Utf8Text(sourceCode))
 				}
 			}
 		case "attributes":
@@ -44,8 +44,8 @@ func (p *Parser) nodeToBitStruct(node *sitter.Node, currentModule *idx.Module, d
 		structFields,
 		currentModule.GetModuleString(),
 		*docId,
-		idx.NewRangeFromTreeSitterPositions(nameNode.StartPoint(), nameNode.EndPoint()),
-		idx.NewRangeFromTreeSitterPositions(node.StartPoint(), node.EndPoint()),
+		idx.NewRangeFromTreeSitterPositions(nameNode.StartPosition(), nameNode.EndPosition()),
+		idx.NewRangeFromTreeSitterPositions(declStart(node), node.EndPosition()),
 	)
 
 	return _struct
@@ -56,8 +56,8 @@ func (p *Parser) nodeToBitStructMembers(node *sitter.Node, currentModule *idx.Mo
 	structFields := []*idx.StructMember{}
 	// node = bitstruct_body
 	for i := 0; i < int(node.ChildCount()); i++ {
-		bdefnode := node.Child(i)
-		bType := bdefnode.Type()
+		bdefnode := node.Child(uint(i))
+		bType := bdefnode.Kind()
 		if bType == "bitstruct_member_declaration" {
 			var memberType idx.Type
 			var identity string
@@ -65,23 +65,23 @@ func (p *Parser) nodeToBitStructMembers(node *sitter.Node, currentModule *idx.Mo
 				memberType = p.typeNodeToType(bdefnodeType, currentModule, sourceCode)
 			}
 			for x := 0; x < int(bdefnode.ChildCount()); x++ {
-				xNode := bdefnode.Child(x)
-				//fmt.Println(xNode.Type())
-				switch xNode.Type() {
+				xNode := bdefnode.Child(uint(x))
+				//fmt.Println(xNode.Kind())
+				switch xNode.Kind() {
 				case "ident":
-					identity = xNode.Content(sourceCode)
+					identity = xNode.Utf8Text(sourceCode)
 				}
 			}
 
 			bitRanges := [2]uint{}
 
 			if bdefnode.ChildCount() >= 4 {
-				lowBit, _ := strconv.ParseInt(bdefnode.Child(3).Content(sourceCode), 10, 32)
+				lowBit, _ := strconv.ParseInt(bdefnode.Child(3).Utf8Text(sourceCode), 10, 32)
 				bitRanges[0] = uint(lowBit)
 			}
 
 			if bdefnode.ChildCount() >= 6 {
-				highBit, _ := strconv.ParseInt(bdefnode.Child(5).Content(sourceCode), 10, 32)
+				highBit, _ := strconv.ParseInt(bdefnode.Child(5).Utf8Text(sourceCode), 10, 32)
 				bitRanges[1] = uint(highBit)
 			}
 
@@ -91,7 +91,7 @@ func (p *Parser) nodeToBitStructMembers(node *sitter.Node, currentModule *idx.Mo
 				option.Some(bitRanges),
 				currentModule.GetModuleString(),
 				*docId,
-				idx.NewRangeFromTreeSitterPositions(bdefnode.Child(1).StartPoint(), bdefnode.Child(1).EndPoint()),
+				idx.NewRangeFromTreeSitterPositions(bdefnode.Child(1).StartPosition(), bdefnode.Child(1).EndPosition()),
 			)
 			structFields = append(structFields, &member)
 		}

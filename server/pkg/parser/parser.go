@@ -7,7 +7,7 @@ import (
 	"github.com/pherrymason/c3-lsp/pkg/parser/queries"
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
 	"github.com/pherrymason/c3-lsp/pkg/symbols_table"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 	"github.com/tliron/commonlog"
 )
 
@@ -27,40 +27,72 @@ func (p *Parser) ClearProject() {
 	// p.pendingToResolve = symbols_table.NewPendingToResolve()
 }
 
+// declStart returns the first child position that is not a doc_comment,
+// so that document ranges begin at the actual keyword rather than the doc comment.
+func declStart(node *sitter.Node) sitter.Point {
+	for i := uint(0); i < node.ChildCount(); i++ {
+		child := node.Child(i)
+		if child != nil && child.Kind() != "doc_comment" {
+			return child.StartPosition()
+		}
+	}
+	return node.StartPosition()
+}
+
+// firstNamedNonDocChild returns the index of the first named child that is not a doc_comment.
+// This is needed because unnamed tokens (like the 'fn' keyword) count as children,
+// and in 0.8 the optional doc_comment may appear before them.
+func firstNamedNonDocChild(node *sitter.Node) uint {
+	for i := uint(0); i < node.ChildCount(); i++ {
+		child := node.Child(i)
+		if child != nil && child.IsNamed() && child.Kind() != "doc_comment" {
+			return i
+		}
+	}
+	return 0
+}
+
+// extractDocComment finds and parses a doc_comment child node, if present.
+// Also checks the parent node (for cases like global_declaration wrapping declaration).
+func (p *Parser) extractDocComment(node *sitter.Node, sourceCode []byte) *idx.DocComment {
+	for i := uint(0); i < node.ChildCount(); i++ {
+		child := node.Child(i)
+		if child != nil && child.Kind() == "doc_comment" {
+			return cast.ToPtr(p.nodeToDocComment(child, sourceCode))
+		}
+	}
+	// Check parent: global_declaration holds doc_comment alongside declaration/const_declaration
+	if parent := node.Parent(); parent != nil {
+		for i := uint(0); i < parent.ChildCount(); i++ {
+			child := parent.Child(i)
+			if child != nil && child.Kind() == "doc_comment" {
+				return cast.ToPtr(p.nodeToDocComment(child, sourceCode))
+			}
+		}
+	}
+	return nil
+}
+
 func (p *Parser) ParseSymbols(doc *document.Document) (symbols_table.UnitModules, symbols_table.PendingToResolve) {
 	parsedModules := symbols_table.NewParsedModules(&doc.URI)
 	pendingToResolve := symbols_table.NewPendingToResolve()
-	//fmt.Println(doc.URI, doc.ContextSyntaxTree.RootNode())
 
-	/*
-		q, err := sitter.NewQuery([]byte(query), cst.GetLanguage())
-		if err != nil {
-			panic(err)
-		}
-		qc := sitter.NewQueryCursor()
-		qc.Exec(q, doc.ContextSyntaxTree.RootNode())*/
-	qc := cst.RunQuery(queries.SymbolsQuery, doc.ContextSyntaxTree.RootNode())
+	qm := cst.RunQuery(queries.SymbolsQuery, doc.ContextSyntaxTree.RootNode())
 	sourceCode := []byte(doc.SourceCode.Text)
-	//fmt.Println(doc.URI, " ", doc.ContextSyntaxTree.RootNode())
-	//fmt.Println(doc.ContextSyntaxTree.RootNode().Content(sourceCode))
-	//parsed := fmt.Sprint(doc.URI, " ", doc.ContextSyntaxTree.RootNode())
-	//fmt.Println(parsed)
 	var moduleSymbol *idx.Module
 	anonymousModuleName := true
 	lastModuleName := ""
-	var lastDocComment *idx.DocComment = nil
-	//subtyptingToResolve := []StructWithSubtyping{}
 
 	for {
-		m, ok := qc.NextMatch()
-		if !ok {
+		m := qm.Next()
+		if m == nil {
 			break
 		}
 
 		for _, c := range m.Captures {
-			nodeType := c.Node.Type()
-			nodeEndPoint := idx.NewPositionFromTreeSitterPoint(c.Node.EndPoint())
-			if nodeType != "module_declaration" && nodeType != "doc_comment" {
+			nodeType := c.Node.Kind()
+			nodeEndPoint := idx.NewPositionFromTreeSitterPoint(c.Node.EndPosition())
+			if nodeType != "module_declaration" {
 				moduleSymbol = parsedModules.GetOrInitModule(
 					lastModuleName,
 					&doc.URI,
@@ -70,161 +102,113 @@ func (p *Parser) ParseSymbols(doc *document.Document) (symbols_table.UnitModules
 			}
 
 			switch nodeType {
-			case "doc_comment":
-				lastDocComment = cast.ToPtr(p.nodeToDocComment(c.Node, sourceCode))
 			case "module_declaration":
 				anonymousModuleName = false
-				module, _, _ := p.nodeToModule(doc, c.Node, sourceCode)
+				module, _, _ := p.nodeToModule(doc, &c.Node, sourceCode)
 				lastModuleName = module.GetName()
 				moduleSymbol = parsedModules.UpdateOrInitModule(
 					module,
 					doc.ContextSyntaxTree.RootNode(),
 				)
 
-				start := c.Node.StartPoint()
-				moduleSymbol.
-					SetStartPosition(idx.NewPositionFromTreeSitterPoint(start))
-
-				moduleSymbol.SetStartPosition(idx.NewPositionFromTreeSitterPoint(start))
+				moduleSymbol.SetStartPosition(idx.NewPositionFromTreeSitterPoint(declStart(&c.Node)))
 				moduleSymbol.ChangeModule(lastModuleName)
-
-				if lastDocComment != nil {
-					moduleSymbol.SetDocComment(lastDocComment)
-				}
+				moduleSymbol.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
 			case "import_declaration":
-				imports := p.nodeToImport(doc, c.Node, sourceCode)
+				imports := p.nodeToImport(doc, &c.Node, sourceCode)
 				moduleSymbol.AddImports(imports)
 
 			case "declaration":
-				variables := p.variableDeclarationNodeToVariable(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				variables := p.variableDeclarationNodeToVariable(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddVariables(variables)
 				pendingToResolve.AddVariableType(variables, moduleSymbol)
-
-				if lastDocComment != nil {
+				docComment := p.extractDocComment(&c.Node, sourceCode)
+				if docComment != nil {
 					for _, v := range variables {
-						v.SetDocComment(lastDocComment)
+						v.SetDocComment(docComment)
 					}
 				}
 
 			case "func_definition", "func_declaration":
-				function, err := p.nodeToFunction(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				function, err := p.nodeToFunction(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				if err == nil {
 					moduleSymbol.AddFunction(&function)
 					pendingToResolve.AddFunctionTypes(&function, moduleSymbol)
-
-					if lastDocComment != nil {
-						function.SetDocComment(lastDocComment)
-					}
+					function.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 				}
 
 			case "enum_declaration":
-				enum := p.nodeToEnum(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				enum := p.nodeToEnum(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddEnum(&enum)
-
-				if lastDocComment != nil {
-					enum.SetDocComment(lastDocComment)
-				}
+				enum.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
 			case "struct_declaration":
-				strukt, membersNeedingSubtypingResolve := p.nodeToStruct(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				strukt, membersNeedingSubtypingResolve := p.nodeToStruct(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddStruct(&strukt)
 				if len(membersNeedingSubtypingResolve) > 0 {
 					pendingToResolve.AddStructSubtype(&strukt, membersNeedingSubtypingResolve)
 				}
-
 				pendingToResolve.AddStructMemberTypes(&strukt, moduleSymbol)
-
-				if lastDocComment != nil {
-					strukt.SetDocComment(lastDocComment)
-				}
+				strukt.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
 			case "bitstruct_declaration":
-				bitstruct := p.nodeToBitStruct(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				bitstruct := p.nodeToBitStruct(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddBitstruct(&bitstruct)
-
-				if lastDocComment != nil {
-					bitstruct.SetDocComment(lastDocComment)
-				}
+				bitstruct.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
 			// TODO: @0.7.7 rename internal methods/structs from Def -> Alias
 			case "alias_declaration":
-				def := p.nodeToDef(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				def := p.nodeToDef(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddDef(&def)
 				pendingToResolve.AddDefType(&def, moduleSymbol)
+				def.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
-				if lastDocComment != nil {
-					def.SetDocComment(lastDocComment)
-				}
-
-			// TODO: @0.7.7 rename internal methods/structs from Distinct  -> TypeDef
+			// TODO: @0.7.7 rename internal methods/structs from Distinct -> TypeDef
 			case "typedef_declaration":
-				distinct := p.nodeToDistinct(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				distinct := p.nodeToDistinct(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddDistinct(&distinct)
 				pendingToResolve.AddDistinctType(&distinct, moduleSymbol)
-
-				if lastDocComment != nil {
-					distinct.SetDocComment(lastDocComment)
-				}
+				distinct.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
 			case "const_declaration":
-				_const := p.nodeToConstant(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				_const := p.nodeToConstant(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddVariable(&_const)
-
-				if lastDocComment != nil {
-					_const.SetDocComment(lastDocComment)
-				}
+				_const.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
 			// TODO: @0.7.7 rename internal methods/structs from Fault -> FaultDef
 			case "faultdef_declaration":
-				fault := p.nodeToFault(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				fault := p.nodeToFault(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddFault(&fault)
-
-				if lastDocComment != nil {
-					fault.SetDocComment(lastDocComment)
-				}
+				fault.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
 			case "interface_declaration":
-				interf := p.nodeToInterface(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				interf := p.nodeToInterface(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				moduleSymbol.AddInterface(&interf)
-
-				if lastDocComment != nil {
-					interf.SetDocComment(lastDocComment)
-				}
+				interf.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 
 			case "macro_declaration":
-				macro, err := p.nodeToMacro(c.Node, moduleSymbol, &doc.URI, sourceCode)
+				macro, err := p.nodeToMacro(&c.Node, moduleSymbol, &doc.URI, sourceCode)
 				if err == nil {
 					moduleSymbol.AddFunction(&macro)
-
-					if lastDocComment != nil {
-						macro.SetDocComment(lastDocComment)
-					}
+					macro.SetDocComment(p.extractDocComment(&c.Node, sourceCode))
 				}
+
+			case "constdef_dec", "attrdef_dec":
+				// new 0.8 declarations — not yet handled, skip
+
 			default:
-				// TODO test that module ends up with wrong endPosition
-				// when this source code:
-				// int variable = 3;
-				// fn void main() {
-				// int value = 4;
-				// v
-				// }
-				lastDocComment = nil
 				continue
 			}
 
-			if nodeType != "doc_comment" {
-				// Ensure the next node won't receive the same doc comment
-				lastDocComment = nil
-				moduleSymbol.SetEndPosition(nodeEndPoint)
-			}
+			moduleSymbol.SetEndPosition(nodeEndPoint)
 		}
 	}
 
 	if moduleSymbol != nil {
 		moduleSymbol.SetEndPosition(
 			idx.NewPositionFromTreeSitterPoint(
-				doc.ContextSyntaxTree.RootNode().EndPoint(),
+				doc.ContextSyntaxTree.RootNode().EndPosition(),
 			),
 		)
 	}
@@ -236,27 +220,25 @@ func (p *Parser) ParseSymbols(doc *document.Document) (symbols_table.UnitModules
 }
 
 func (p *Parser) FindVariableDeclarations(node *sitter.Node, moduleName string, currentModule *idx.Module, docId *string, sourceCode []byte) []*idx.Variable {
-	qc := cst.RunQuery(queries.LocalVarDeclQuery, node)
+	qm := cst.RunQuery(queries.LocalVarDeclQuery, node)
 
 	var variables []*idx.Variable
 	found := make(map[string]bool)
 	//sourceCode := []byte(doc.Content)
 	for {
-		m, ok := qc.NextMatch()
-		if !ok {
+		m := qm.Next()
+		if m == nil {
 			break
 		}
-		// Apply predicates filtering
-		m = qc.FilterPredicates(m, sourceCode)
 		for _, c := range m.Captures {
-			if c.Node.Type() != "declaration" {
+			if c.Node.Kind() != "declaration" {
 				continue
 			}
-			content := c.Node.Content(sourceCode)
+			content := c.Node.Utf8Text(sourceCode)
 
 			if _, exists := found[content]; !exists {
 				found[content] = true
-				funcVariables := p.variableDeclarationNodeToVariable(c.Node, currentModule, docId, sourceCode)
+				funcVariables := p.variableDeclarationNodeToVariable(&c.Node, currentModule, docId, sourceCode)
 
 				variables = append(variables, funcVariables...)
 			}

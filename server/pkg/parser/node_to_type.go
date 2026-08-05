@@ -6,11 +6,11 @@ import (
 
 	"github.com/pherrymason/c3-lsp/pkg/option"
 	"github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 func (p *Parser) typeNodeToType(node *sitter.Node, currentModule *symbols.Module, sourceCode []byte) symbols.Type {
-	//fmt.Println(node, node.Content(sourceCode))
+	//fmt.Println(node, node.Utf8Text(sourceCode))
 	baseTypeLanguage := false
 	baseType := ""
 	modulePath := currentModule.GetModuleString()
@@ -18,27 +18,27 @@ func (p *Parser) typeNodeToType(node *sitter.Node, currentModule *symbols.Module
 
 	parsedType := symbols.Type{}
 
-	tailChild := node.Child(int(node.ChildCount()) - 1)
-	isOptional := !tailChild.IsNamed() && tailChild.Content(sourceCode) == "?"
+	tailChild := node.Child(uint(int(node.ChildCount())) - 1)
+	isOptional := !tailChild.IsNamed() && tailChild.Utf8Text(sourceCode) == "?"
 
-	//fmt.Println(node.Type(), node.Content(sourceCode), node.ChildCount())
+	//fmt.Println(node.Kind(), node.Utf8Text(sourceCode), node.ChildCount())
 	isCollection := false
 	collectionSize := option.None[int]()
 	pointerCount := 0
 
-	if node.Type() == "base_type_name" {
+	if node.Kind() == "base_type_name" {
 		baseTypeLanguage = true
-		baseType = node.Content(sourceCode)
+		baseType = node.Utf8Text(sourceCode)
 	}
 	for i := 0; i < int(node.ChildCount()); i++ {
-		n := node.Child(i)
-		// fmt.Println(node.Type()+"---"+n.Type(), n.Content(sourceCode))
-		switch n.Type() {
+		n := node.Child(uint(i))
+		// fmt.Println(node.Kind()+"---"+n.Kind(), n.Utf8Text(sourceCode))
+		switch n.Kind() {
 		case "base_type_name":
 			baseTypeLanguage = true
-			baseType = n.Content(sourceCode)
+			baseType = n.Utf8Text(sourceCode)
 		case "type_ident":
-			baseType = n.Content(sourceCode)
+			baseType = n.Utf8Text(sourceCode)
 
 		case "generic_type_ident":
 			if n.ChildCount() >= 1 {
@@ -47,8 +47,8 @@ func (p *Parser) typeNodeToType(node *sitter.Node, currentModule *symbols.Module
 			if n.ChildCount() >= 2 {
 				genericArgList := n.Child(1)
 				for g := 0; g < int(genericArgList.ChildCount()); g++ {
-					gn := genericArgList.Child(g)
-					if gn.Type() == "type" {
+					gn := genericArgList.Child(uint(g))
+					if gn.Kind() == "type" {
 						gType := p.typeNodeToType(gn, currentModule, sourceCode)
 						generic_arguments = append(generic_arguments, gType)
 					}
@@ -59,13 +59,13 @@ func (p *Parser) typeNodeToType(node *sitter.Node, currentModule *symbols.Module
 			parse_path_type_ident(n, sourceCode, &modulePath, &baseType)
 
 		case "type_suffix":
-			suffix := n.Content(sourceCode)
+			suffix := n.Utf8Text(sourceCode)
 			if suffix == "*" {
 				pointerCount = 1
 			} else if suffix[0] == '[' {
 				isCollection = true
-				if n.ChildCount() > 2 && n.Child(1).Type() == "integer_literal" {
-					sizeStr := n.Child(1).Content(sourceCode)
+				if n.ChildCount() > 2 && n.Child(1).Kind() == "integer_literal" {
+					sizeStr := n.Child(1).Utf8Text(sourceCode)
 					i, err := strconv.Atoi(sizeStr)
 					if err == nil {
 						collectionSize = option.Some(i)
@@ -100,9 +100,9 @@ func (p *Parser) typeNodeToType(node *sitter.Node, currentModule *symbols.Module
 
 func parse_path_type_ident(n *sitter.Node, sourceCode []byte, modulePath, baseType *string) {
 	if n.ChildCount() == 2 {
-		*modulePath = strings.Trim(n.Child(0).Content(sourceCode), ":")
-		*baseType = n.Child(1).Content(sourceCode)
+		*modulePath = strings.Trim(n.Child(0).Utf8Text(sourceCode), ":")
+		*baseType = n.Child(1).Utf8Text(sourceCode)
 	} else if n.ChildCount() > 0 {
-		*baseType = n.Child(0).Content(sourceCode)
+		*baseType = n.Child(0).Utf8Text(sourceCode)
 	}
 }

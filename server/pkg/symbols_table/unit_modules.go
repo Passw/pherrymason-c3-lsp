@@ -3,7 +3,7 @@ package symbols_table
 import (
 	"github.com/pherrymason/c3-lsp/pkg/data"
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 type UnitModules struct {
@@ -38,12 +38,12 @@ func (ps *UnitModules) GetOrInitModule(moduleName string, docId *string, rootNod
 			moduleName,
 			*docId,
 			idx.NewRangeFromTreeSitterPositions(
-				rootNode.StartPoint(),
-				rootNode.EndPoint(),
+				rootNode.StartPosition(),
+				rootNode.EndPosition(),
 			),
 			idx.NewRangeFromTreeSitterPositions(
-				rootNode.StartPoint(),
-				rootNode.EndPoint(),
+				rootNode.StartPosition(),
+				rootNode.EndPosition(),
 			),
 		)
 

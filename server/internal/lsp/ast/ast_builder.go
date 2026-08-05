@@ -2,7 +2,7 @@ package ast
 
 import (
 	"github.com/pherrymason/c3-lsp/pkg/option"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 // --
@@ -34,7 +34,7 @@ func (d *ASTBaseNodeBuilder) WithSitterPosRange(start sitter.Point, end sitter.P
 }
 
 func (i *ASTBaseNodeBuilder) WithSitterPos(node *sitter.Node) *ASTBaseNodeBuilder {
-	i.WithSitterPosRange(node.StartPoint(), node.EndPoint())
+	i.WithSitterPosRange(node.StartPosition(), node.EndPosition())
 	return i
 }
 
@@ -69,7 +69,7 @@ func (i *IdentifierBuilder) WithPath(path string) *IdentifierBuilder {
 }
 
 func (i *IdentifierBuilder) WithSitterPos(node *sitter.Node) *IdentifierBuilder {
-	i.bn.WithSitterPosRange(node.StartPoint(), node.EndPoint())
+	i.bn.WithSitterPosRange(node.StartPosition(), node.EndPosition())
 	return i
 }
 
@@ -174,7 +174,7 @@ func (b *DefDeclBuilder) WithResolvesTo(resolvesTo string) *DefDeclBuilder {
 }
 
 func (b *DefDeclBuilder) WithSitterPos(node *sitter.Node) *DefDeclBuilder {
-	b.a.WithSitterPosRange(node.StartPoint(), node.EndPoint())
+	b.a.WithSitterPosRange(node.StartPosition(), node.EndPosition())
 	return b
 }
 
@@ -183,8 +183,8 @@ func (b *DefDeclBuilder) WithName(name string) *DefDeclBuilder {
 	return b
 }
 func (b *DefDeclBuilder) WithIdentifierSitterPos(node *sitter.Node) *DefDeclBuilder {
-	b.d.Name.StartPos = Position{uint(node.StartPoint().Row), uint(node.StartPoint().Column)}
-	b.d.Name.EndPos = Position{uint(node.EndPoint().Row), uint(node.EndPoint().Column)}
+	b.d.Name.StartPos = Position{uint(node.StartPosition().Row), uint(node.StartPosition().Column)}
+	b.d.Name.EndPos = Position{uint(node.EndPosition().Row), uint(node.EndPosition().Column)}
 
 	return b
 }

@@ -2,7 +2,7 @@ package parser
 
 import (
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 /*
@@ -40,35 +40,36 @@ alias_declaration: $ => seq(
 func (p *Parser) nodeToDef(node *sitter.Node, currentModule *idx.Module, docId *string, sourceCode []byte) idx.Def {
 	//fmt.Println(node)
 	// TODO: attributes
+	ds := declStart(node)
 	defBuilder := idx.NewDefBuilder("", currentModule.GetModuleString(), *docId).
 		WithDocumentRange(
-			uint(node.StartPoint().Row),
-			uint(node.StartPoint().Column),
-			uint(node.EndPoint().Row),
-			uint(node.EndPoint().Column),
+			uint(ds.Row),
+			uint(ds.Column),
+			uint(node.EndPosition().Row),
+			uint(node.EndPosition().Column),
 		)
 	if nameNode := node.ChildByFieldName("name"); nameNode != nil {
-		defBuilder.WithName(nameNode.Content(sourceCode)).
+		defBuilder.WithName(nameNode.Utf8Text(sourceCode)).
 			WithIdentifierRange(
-				uint(nameNode.StartPoint().Row),
-				uint(nameNode.StartPoint().Column),
-				uint(nameNode.EndPoint().Row),
-				uint(nameNode.EndPoint().Column),
+				uint(nameNode.StartPosition().Row),
+				uint(nameNode.StartPosition().Column),
+				uint(nameNode.EndPosition().Row),
+				uint(nameNode.EndPosition().Column),
 			)
 	}
-	var bodyNode = &sitter.Node{}
+	var bodyNode *sitter.Node
 	for i := 0; i < int(node.ChildCount()-1); i++ {
-		if node.Child(i).Type() == "=" {
-			bodyNode = node.Child(i + 1)
+		if node.Child(uint(i)).Kind() == "=" {
+			bodyNode = node.Child(uint(i + 1))
 			break
 		}
 	}
-	if bodyNode.Type() == "type" {
+	if bodyNode != nil && bodyNode.Kind() == "type" {
 		// Might contain module path
 		type_ := p.typeNodeToType(bodyNode, currentModule, sourceCode)
 		defBuilder.WithResolvesToType(type_)
-	} else {
-		defBuilder.WithResolvesTo(bodyNode.Content(sourceCode))
+	} else if bodyNode != nil {
+		defBuilder.WithResolvesTo(bodyNode.Utf8Text(sourceCode))
 	}
 
 	return *defBuilder.Build()

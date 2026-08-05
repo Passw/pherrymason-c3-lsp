@@ -2,7 +2,7 @@ package parser
 
 import (
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 func (p *Parser) variableDeclarationNodeToVariable(declarationNode *sitter.Node, currentModule *idx.Module, docId *string, sourceCode []byte) []*idx.Variable {
@@ -12,52 +12,52 @@ func (p *Parser) variableDeclarationNodeToVariable(declarationNode *sitter.Node,
 
 	//fmt.Println(declarationNode.ChildCount())
 	//fmt.Println(declarationNode)
-	//fmt.Println(declarationNode.Content(sourceCode))
+	//fmt.Println(declarationNode.Utf8Text(sourceCode))
 	//fmt.Println("----")
 
-	for i := uint32(0); i < declarationNode.ChildCount(); i++ {
-		n := declarationNode.Child(int(i))
-		//fmt.Println(i, ":", n.Type(), ":: ", n.Content(sourceCode), ":: has errors: ", n.HasError())
-		switch n.Type() {
+	for i := uint(0); i < declarationNode.ChildCount(); i++ {
+		n := declarationNode.Child(uint(i))
+		//fmt.Println(i, ":", n.Kind(), ":: ", n.Utf8Text(sourceCode), ":: has errors: ", n.HasError())
+		switch n.Kind() {
 		case "type":
-			//typeNodeContent = n.Content(sourceCode)
+			//typeNodeContent = n.Utf8Text(sourceCode)
 			vType = p.typeNodeToType(n, currentModule, sourceCode)
 		case "ident":
 			variable := idx.NewVariable(
-				n.Content(sourceCode),
+				n.Utf8Text(sourceCode),
 				vType,
 				//idx.NewTypeFromString(typeNodeContent, moduleName), // <-- moduleName is potentially wrong
 				currentModule.GetModuleString(),
 				*docId,
 				idx.NewRangeFromTreeSitterPositions(
-					n.StartPoint(),
-					n.EndPoint(),
+					n.StartPosition(),
+					n.EndPosition(),
 				),
 				idx.NewRangeFromTreeSitterPositions(
-					declarationNode.StartPoint(),
-					declarationNode.EndPoint()),
+					declarationNode.StartPosition(),
+					declarationNode.EndPosition()),
 			)
 			variables = append(variables, &variable)
 		case "identifier_list":
 			for j := 0; j < int(n.ChildCount()); j++ {
 
-				bn := n.Child(j)
-				if bn.Type() != "ident" {
+				bn := n.Child(uint(j))
+				if bn.Kind() != "ident" {
 					continue
 				}
 				variable := idx.NewVariable(
-					bn.Content(sourceCode),
+					bn.Utf8Text(sourceCode),
 					vType,
 					//idx.NewTypeFromString(typeNodeContent, moduleName), // <-- moduleName is potentially wrong
 					currentModule.GetModuleString(),
 					*docId,
 					idx.NewRangeFromTreeSitterPositions(
-						bn.StartPoint(),
-						bn.EndPoint(),
+						bn.StartPosition(),
+						bn.EndPosition(),
 					),
 					idx.NewRangeFromTreeSitterPositions(
-						declarationNode.StartPoint(),
-						declarationNode.EndPoint()),
+						declarationNode.StartPosition(),
+						declarationNode.EndPosition()),
 				)
 				variables = append(variables, &variable)
 			}
@@ -91,13 +91,13 @@ func (p *Parser) nodeToConstant(node *sitter.Node, currentModule *idx.Module, do
 
 	//fmt.Println(node.ChildCount())
 	//fmt.Println(node)
-	//fmt.Println(node.Content(sourceCode))
+	//fmt.Println(node.Utf8Text(sourceCode))
 
-	for i := uint32(0); i < node.ChildCount(); i++ {
-		n := node.Child(int(i))
-		switch n.Type() {
+	for i := uint(0); i < node.ChildCount(); i++ {
+		n := node.Child(uint(i))
+		switch n.Kind() {
 		case "type":
-			typeNodeContent = n.Content(sourceCode)
+			typeNodeContent = n.Utf8Text(sourceCode)
 
 		case "const_ident":
 			idNode = n
@@ -105,17 +105,17 @@ func (p *Parser) nodeToConstant(node *sitter.Node, currentModule *idx.Module, do
 	}
 
 	constant = idx.NewConstant(
-		idNode.Content(sourceCode),
+		idNode.Utf8Text(sourceCode),
 		idx.NewTypeFromString(typeNodeContent, currentModule.GetModuleString()), // <-- moduleName is potentially wrong
 		currentModule.GetModuleString(),
 		*docId,
 		idx.NewRangeFromTreeSitterPositions(
-			idNode.StartPoint(),
-			idNode.EndPoint(),
+			idNode.StartPosition(),
+			idNode.EndPosition(),
 		),
 		idx.NewRangeFromTreeSitterPositions(
-			node.StartPoint(),
-			node.EndPoint()),
+			node.StartPosition(),
+			node.EndPosition()),
 	)
 
 	return constant

@@ -5,7 +5,7 @@ import (
 	code "github.com/pherrymason/c3-lsp/pkg/document/sourcecode"
 	"github.com/pherrymason/c3-lsp/pkg/symbols"
 	"github.com/pherrymason/c3-lsp/pkg/utils"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 

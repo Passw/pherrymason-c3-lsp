@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 var Language *sitter.Language
@@ -23,7 +23,9 @@ func init() {
 
 func NewSitterParser() *sitter.Parser {
 	parser := sitter.NewParser()
-	parser.SetLanguage(Language)
+	if err := parser.SetLanguage(Language); err != nil {
+		panic(fmt.Errorf("failed setting language: %v", err))
+	}
 
 	return parser
 }
@@ -31,17 +33,14 @@ func NewSitterParser() *sitter.Parser {
 func GetParsedTreeFromString(source string) *sitter.Tree {
 	sourceCode := []byte(source)
 	parser := NewSitterParser()
-	n, err := parser.ParseCtx(context.Background(), nil, sourceCode)
-	if err != nil {
-		panic(fmt.Errorf("failed parsing tree: %v", err))
-	}
+	n := parser.ParseCtx(context.Background(), sourceCode, nil)
 
 	return n
 }
 
-func RunQuery(query *sitter.Query, node *sitter.Node) *sitter.QueryCursor {
+func RunQuery(query *sitter.Query, node *sitter.Node) *sitter.QueryMatches {
 	qc := sitter.NewQueryCursor()
-	qc.Exec(query, node)
+	matches := qc.Matches(query, node, nil)
 
-	return qc
+	return &matches
 }

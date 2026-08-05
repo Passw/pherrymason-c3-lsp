@@ -2,7 +2,7 @@ package parser
 
 import (
 	idx "github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 /*
@@ -33,17 +33,17 @@ func (p *Parser) nodeToFault(node *sitter.Node, currentModule *idx.Module, docId
 
 	idRange := idx.NewRange(0, 0, 0, 0)
 	for i := 0; i < int(node.ChildCount()); i++ {
-		constantNode := node.Child(i)
+		constantNode := node.Child(uint(i))
 
-		if constantNode.Type() == "const_ident" {
+		if constantNode.Kind() == "const_ident" {
 			constants = append(constants,
 				idx.NewFaultConstant(
-					constantNode.Content(sourceCode),
+					constantNode.Utf8Text(sourceCode),
 					"",
 					module,
 					*docId,
-					idx.NewRangeFromTreeSitterPositions(constantNode.StartPoint(), constantNode.EndPoint()),
-					idx.NewRangeFromTreeSitterPositions(constantNode.StartPoint(), constantNode.EndPoint()),
+					idx.NewRangeFromTreeSitterPositions(constantNode.StartPosition(), constantNode.EndPosition()),
+					idx.NewRangeFromTreeSitterPositions(constantNode.StartPosition(), constantNode.EndPosition()),
 				),
 			)
 		}
@@ -56,7 +56,7 @@ func (p *Parser) nodeToFault(node *sitter.Node, currentModule *idx.Module, docId
 		module,
 		*docId,
 		idRange,
-		idx.NewRangeFromTreeSitterPositions(node.StartPoint(), node.EndPoint()),
+		idx.NewRangeFromTreeSitterPositions(declStart(node), node.EndPosition()),
 	)
 
 	return fault

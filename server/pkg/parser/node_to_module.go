@@ -3,7 +3,7 @@ package parser
 import (
 	"github.com/pherrymason/c3-lsp/pkg/document"
 	"github.com/pherrymason/c3-lsp/pkg/symbols"
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 /*
@@ -21,36 +21,36 @@ import (
 */
 func (p *Parser) nodeToModule(doc *document.Document, node *sitter.Node, sourceCode []byte) (*symbols.Module, string, map[string]*symbols.GenericParameter) {
 
-	moduleName := node.ChildByFieldName("path").Content(sourceCode)
+	moduleName := node.ChildByFieldName("path").Utf8Text(sourceCode)
 
 	generic_parameters := make(map[string]*symbols.GenericParameter)
 	attributes := []string{}
 
 	for i := 0; i < int(node.ChildCount()); i++ {
-		n := node.Child(i)
-		//fmt.Println("Node type:", n.Type(), ":: ", n.Content(sourceCode))
-		switch n.Type() {
+		n := node.Child(uint(i))
+		//fmt.Println("Node type:", n.Kind(), ":: ", n.Utf8Text(sourceCode))
+		switch n.Kind() {
 		case "generic_param_list":
 			for g := 0; g < int(n.ChildCount()); g++ {
-				gn := n.Child(g)
-				//fmt.Println("G Node type:", gn.Type(), ":: ", gn.Content(sourceCode))
-				if gn.Type() == "type_ident" {
-					genericName := gn.Content(sourceCode)
+				gn := n.Child(uint(g))
+				//fmt.Println("G Node type:", gn.Kind(), ":: ", gn.Utf8Text(sourceCode))
+				if gn.Kind() == "type_ident" {
+					genericName := gn.Utf8Text(sourceCode)
 					param := symbols.NewGenericParameter(
 						genericName,
 						moduleName,
 						doc.URI,
-						symbols.NewRangeFromTreeSitterPositions(gn.StartPoint(), gn.EndPoint()),
-						symbols.NewRangeFromTreeSitterPositions(gn.StartPoint(), gn.EndPoint()),
+						symbols.NewRangeFromTreeSitterPositions(gn.StartPosition(), gn.EndPosition()),
+						symbols.NewRangeFromTreeSitterPositions(gn.StartPosition(), gn.EndPosition()),
 					)
 					generic_parameters[genericName] = param
 				}
 			}
 		case "attributes":
 			for a := 0; a < int(n.ChildCount()); a++ {
-				gn := n.Child(a)
-				//fmt.Println("Attr Node type:", gn.Type(), ":: ", gn.Content(sourceCode))
-				attributes = append(attributes, gn.Content(sourceCode))
+				gn := n.Child(uint(a))
+				//fmt.Println("Attr Node type:", gn.Kind(), ":: ", gn.Utf8Text(sourceCode))
+				attributes = append(attributes, gn.Utf8Text(sourceCode))
 			}
 		}
 	}
@@ -59,8 +59,8 @@ func (p *Parser) nodeToModule(doc *document.Document, node *sitter.Node, sourceC
 	module := symbols.NewModule(
 		moduleName,
 		doc.URI,
-		symbols.NewRangeFromTreeSitterPositions(name.StartPoint(), name.EndPoint()),
-		symbols.NewRangeFromTreeSitterPositions(name.StartPoint(), name.EndPoint()),
+		symbols.NewRangeFromTreeSitterPositions(name.StartPosition(), name.EndPosition()),
+		symbols.NewRangeFromTreeSitterPositions(name.StartPosition(), name.EndPosition()),
 	)
 	module.SetAttributes(attributes)
 	module.SetGenericParameters(generic_parameters)
@@ -80,15 +80,28 @@ func (p *Parser) nodeToImport(doc *document.Document, node *sitter.Node, sourceC
 	imports := []string{}
 
 	for i := 0; i < int(node.ChildCount()); i++ {
-		n := node.Child(i)
+		n := node.Child(uint(i))
 
-		switch n.Type() {
+		var pathIdent *sitter.Node
+		switch n.Kind() {
+		case "import_path":
+			// 0.8: imports are wrapped in import_path nodes
+			for j := 0; j < int(n.ChildCount()); j++ {
+				if n.Child(uint(j)).Kind() == "path_ident" {
+					pathIdent = n.Child(uint(j))
+					break
+				}
+			}
 		case "path_ident":
+			pathIdent = n
+		}
+
+		if pathIdent != nil {
 			temp_mod := ""
-			for m := 0; m < int(n.ChildCount()); m++ {
-				sn := n.Child(m)
-				if sn.Type() == "ident" || sn.Type() == "module_resolution" {
-					temp_mod += sn.Content(sourceCode)
+			for m := 0; m < int(pathIdent.ChildCount()); m++ {
+				sn := pathIdent.Child(uint(m))
+				if sn.Kind() == "ident" || sn.Kind() == "module_resolution" {
+					temp_mod += sn.Utf8Text(sourceCode)
 				}
 			}
 			imports = append(imports, temp_mod)
